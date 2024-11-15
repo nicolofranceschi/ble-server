@@ -1,0 +1,15 @@
+[Unit]
+   Description=Server BLE per configurazione Wi-Fi
+   After=network.target
+
+   [Service]
+   Type=simple
+   ExecStart=/usr/local/bin/ble/start_ble_server.sh
+   Restart=on-failure
+   User=box
+   StandardOutput=syslog
+   StandardError=syslog
+   Environment=NODE_ENV=production
+
+   [Install]
+   WantedBy=multi-user.target
