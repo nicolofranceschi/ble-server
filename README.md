@@ -6,6 +6,11 @@ sudo visudo
 #add to bottom
 box  ALL=(ALL) NOPASSWD: ALL
 
+sudo systemctl stop bluetooth
+sudo systemctl disable bluetooth
+
+sudo apt-get install bluetooth bluez libbluetooth-dev libudev-dev libusb-1.0-0-dev
+
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh | bash
 # download and install Node.js (you may need to restart the terminal)
 nvm install 20.18.0
