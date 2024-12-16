@@ -236,9 +236,89 @@ class listSSID extends BlenoCharacteristic {
     }
 }
 
+class getIp extends BlenoCharacteristic {
+    constructor() {
+        super({
+            uuid: 'ffffffff-ffff-ffff-ffff-fffffffffff4',
+            properties: ['write', 'notify'], // Aggiunto 'notify' alle proprietà
+            value: null
+        });
+
+        this._value = Buffer.alloc(0);
+        this._updateValueCallback = null;
+    }
+
+    onSubscribe(maxValueSize, updateValueCallback) {
+        console.log('Client sottoscritto alle notifiche');
+        this._updateValueCallback = updateValueCallback;
+    }
+
+    onUnsubscribe() {
+        console.log('Client annullato sottoscrizione alle notifiche');
+        this._updateValueCallback = null;
+    }
+
+    onWriteRequest(data, offset, withoutResponse, callback) {
+
+        console.log('Sono connesso ?', data.toString());
+
+        try {
+
+            const stepJson = JSON.parse(data.toString());
+
+            const offsetString = stepJson.offset.replace(/'/g, "\\'");
+
+            const offset = parseInt(offsetString);
+
+            const cmd = `hostname -I | tr ' ' '\n' | grep -E '^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01]))' | head -n 1`;
+
+            exec(cmd, (error, stdout, stderr) => {
+
+                const stringBase64 = Buffer.from(stdout)
+                const mtuSize = 20; // Assuming a typical MTU size minus some bytes for headers
+                const end = Math.min(offset + mtuSize, stringBase64.length);
+
+                const chunk = stringBase64.slice(offset, end);
+                console.log(stringBase64)
+                console.log(chunk)
+                console.log(offset)
+                console.log(end)
+                
+                if (error) {
+                    console.error(`Errore nella connessione al Wi-Fi: ${error}`);
+                    if (this._updateValueCallback) {
+                        const message = 'Errore nella connessione al Wi-Fi' + stderr;
+                        console.log('Sending error notification to client ->:', message);
+                        this._updateValueCallback(Buffer.from(message));
+                    }
+                    callback(this.RESULT_UNLIKELY_ERROR);
+                    return;
+                }
+
+                if (this._updateValueCallback) {
+                    const message = 'Connesso con successo alla rete Wi-Fi' + stdout;
+                    console.log('Sending success notification to client ->:', chunk);
+                    this._updateValueCallback(chunk);
+                }
+
+                callback(this.RESULT_SUCCESS, chunk);
+            });
+        } catch (error) {
+            console.error('Impossibile analizzare le credenziali Wi-Fi:', error);
+            if (this._updateValueCallback) {
+                const message = 'Errore nel parsing delle credenziali';
+                console.log('Sending error notification to client ->:', message);
+                this._updateValueCallback(Buffer.from(message));
+            }
+            callback(this.RESULT_UNLIKELY_ERROR);
+        }
+    }
+}
+
 const wifiCharacteristic = new connectWifi();
 const wifihandleConnection = new handleConnection();
 const wifilistSSID = new listSSID()
+const wifigetmyIp = new getIp()
 
 bleno.on('stateChange', (state) => {
     console.log('Stato Bluetooth: ' + state);
@@ -258,7 +338,8 @@ bleno.on('advertisingStart', (error) => {
                 characteristics: [
                     wifiCharacteristic,
                     wifihandleConnection,
-                    wifilistSSID
+                    wifilistSSID,
+                    wifigetmyIp
                 ]
             })
         ]);
