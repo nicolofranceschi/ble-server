@@ -27,6 +27,45 @@ docker logs ble-server
 docker compose down
 ```
 
+### Setting Up Auto-Start on Boot
+
+The Docker Compose file is already configured with `restart: always`, which ensures the container automatically restarts if it crashes or when the system reboots, as long as Docker itself starts on boot.
+
+To configure Docker to start automatically on boot:
+
+```bash
+# Make the script executable
+chmod +x enable-docker-autostart.sh
+
+# Run the script as root
+sudo ./enable-docker-autostart.sh
+```
+
+This will:
+- Configure Docker to start automatically on system boot
+- Set up Docker's restart policies
+- Start Docker now if it's not already running
+
+After setting this up and running your container once with:
+```bash
+docker compose up -d
+```
+
+The container will automatically start:
+- After system reboots
+- If the container crashes
+- If Docker is restarted
+
+To verify the container is running after a reboot:
+```bash
+docker ps
+```
+
+To manually stop the container:
+```bash
+docker compose down
+```
+
 ### Prerequisites for Docker
 
 - Docker and Docker Compose installed
