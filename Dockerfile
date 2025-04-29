@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y \
     g++ \
     libcap2-bin \
     sudo \
+    wireless-tools \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -45,8 +46,8 @@ RUN setcap cap_net_raw+eip $(eval readlink -f `which node`)
 RUN groupadd -r bluetoothapp || true
 RUN useradd -r -g bluetoothapp -G bluetooth,dialout bluetoothapp || true
 
-# Allow bluetoothapp to use sudo for hciconfig without password
-RUN echo "bluetoothapp ALL=(ALL) NOPASSWD: /usr/bin/hciconfig" >> /etc/sudoers
+# Allow bluetoothapp to use sudo for necessary commands without password
+RUN echo "bluetoothapp ALL=(ALL) NOPASSWD: /usr/bin/hciconfig, /usr/bin/nmcli, /usr/bin/jq, /sbin/iwlist, /bin/hostname, /usr/bin/tr, /bin/grep, /usr/bin/head" >> /etc/sudoers
 
 # Set up udev rules for Bluetooth access
 RUN echo 'SUBSYSTEM=="bluetooth", OWNER="bluetoothapp"' > /etc/udev/rules.d/50-bluetooth-user.rules
