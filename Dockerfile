@@ -40,25 +40,22 @@ RUN chmod +x start_ble_server.sh
 # Set capabilities for node binary to access Bluetooth
 RUN setcap cap_net_raw+eip $(eval readlink -f `which node`)
 
-# Create a non-root user for running the application
-RUN id -g bluetooth || groupadd -r bluetooth
-RUN id -u bluetooth || useradd -r -g bluetooth bluetooth
-RUN usermod -aG bluetooth bluetooth || true
-# Add user to dialout for serial port access
-RUN usermod -aG dialout bluetooth || true
+# Create or verify bluetooth user for running the application
+RUN groupadd -r bluetoothapp || true
+RUN useradd -r -g bluetoothapp -G bluetooth,dialout bluetoothapp || true
 
 # Set up udev rules for Bluetooth access
-RUN echo 'SUBSYSTEM=="bluetooth", OWNER="bluetooth"' > /etc/udev/rules.d/50-bluetooth-user.rules
+RUN echo 'SUBSYSTEM=="bluetooth", OWNER="bluetoothapp"' > /etc/udev/rules.d/50-bluetooth-user.rules
 
 # Set appropriate ownership
 RUN mkdir -p /var/run/bluetooth && \
-    chown -R bluetooth:bluetooth /var/run/bluetooth
+    chown -R bluetoothapp:bluetoothapp /var/run/bluetooth
 
-# Give the bluetooth user permission to the node binary location
-RUN mkdir -p /app && chown -R bluetooth:bluetooth /app
+# Give the bluetoothapp user permission to the node binary location
+RUN mkdir -p /app && chown -R bluetoothapp:bluetoothapp /app
 
 # Switch to non-root user
-USER bluetooth
+USER bluetoothapp
 
 # Set the entrypoint script
 ENTRYPOINT ["./start_ble_server.sh"]
