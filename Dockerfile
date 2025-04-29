@@ -41,11 +41,11 @@ RUN chmod +x start_ble_server.sh
 RUN setcap cap_net_raw+eip $(eval readlink -f `which node`)
 
 # Create a non-root user for running the application
-RUN groupadd -r bluetooth && \
-    useradd -r -g bluetooth bluetooth && \
-    usermod -aG bluetooth bluetooth && \
-    # Add user to dialout for serial port access
-    usermod -aG dialout bluetooth
+RUN id -g bluetooth || groupadd -r bluetooth
+RUN id -u bluetooth || useradd -r -g bluetooth bluetooth
+RUN usermod -aG bluetooth bluetooth || true
+# Add user to dialout for serial port access
+RUN usermod -aG dialout bluetooth || true
 
 # Set up udev rules for Bluetooth access
 RUN echo 'SUBSYSTEM=="bluetooth", OWNER="bluetooth"' > /etc/udev/rules.d/50-bluetooth-user.rules
