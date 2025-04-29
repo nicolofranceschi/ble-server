@@ -7,13 +7,13 @@ A Bluetooth Low Energy (BLE) server that allows Wi-Fi configuration via a mobile
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/ble-server.git
+git clone https://github.com/nicolofranceschi/ble-server.git
 cd ble-server
 ```
 
 2. Build and start the Docker container:
 ```bash
-docker-compose up -d
+docker compose up -d --build
 ```
 
 3. Check container status:
@@ -32,6 +32,39 @@ docker-compose down
 - Docker and Docker Compose installed
 - Bluetooth hardware on the host machine
 - Host must be running Linux (Bluetooth passthrough doesn't work on macOS/Windows)
+
+### Docker Permission Setup
+
+If you encounter this error:
+```
+unable to get image: permission denied while trying to connect to the Docker daemon socket
+```
+
+You can either:
+
+1. Run the provided permission script:
+```bash
+sudo ./fix-docker-permissions.sh
+# Then either log out and back in, or run:
+newgrp docker
+```
+
+2. Or manually add your user to the docker group:
+```bash
+# Add current user to docker group
+sudo usermod -aG docker $USER
+
+# Apply group changes (or log out and back in)
+newgrp docker
+
+# Verify docker works without sudo
+docker ps
+```
+
+3. Or use sudo with docker commands:
+```bash
+sudo docker compose up -d --build
+```
 
 ### Fixing Bluetooth Permissions
 
