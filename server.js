@@ -180,49 +180,84 @@ class listSSID extends BlenoCharacteristic {
     }
 
     onWriteRequest(data, offset, withoutResponse, callback) {
-
         console.log('Sono connesso ?', data.toString());
 
         try {
-
-            const stepJson = JSON.parse(data.toString());
-
-            const offsetString = stepJson.offset.replace(/'/g, "\\'");
-
-            const offset = parseInt(offsetString);
-
-            const cmd = `nmcli -f ssid,mode,chan,rate,signal,bars,security -t dev wifi | jq -sR 'split("\n") | map(split(":")) | map({"network": .[0],"mode": .[1],"channel": .[2],"rate": .[3], "signal": .[4], "bars": .[5], "security": .[6]})'`;
-
-            exec(cmd, (error, stdout, stderr) => {
-
-                const stringBase64 = Buffer.from(stdout)
-                const mtuSize = 20; // Assuming a typical MTU size minus some bytes for headers
-                const end = Math.min(offset + mtuSize, stringBase64.length);
-
-                const chunk = stringBase64.slice(offset, end);
-                console.log(stringBase64)
-                console.log(chunk)
-                console.log(offset)
-                console.log(end)
-                
-                if (error) {
-                    console.error(`Errore nella connessione al Wi-Fi: ${error}`);
+            // Debug: Check if jq is installed
+            exec('which jq', (err, jqPath, stderr) => {
+                if (err) {
+                    console.error('ERROR: jq is not installed or not in PATH:', err);
                     if (this._updateValueCallback) {
-                        const message = 'Errore nella connessione al Wi-Fi' + stderr;
-                        console.log('Sending error notification to client ->:', message);
-                        this._updateValueCallback(Buffer.from(message));
+                        this._updateValueCallback(Buffer.from('ERROR: jq command not found. Install with: apt-get install jq'));
                     }
                     callback(this.RESULT_UNLIKELY_ERROR);
                     return;
                 }
+                
+                console.log('jq found at:', jqPath.trim());
+                
+                const stepJson = JSON.parse(data.toString());
+                const offsetString = stepJson.offset.replace(/'/g, "\\'");
+                const offset = parseInt(offsetString);
 
-                if (this._updateValueCallback) {
-                    const message = 'Connesso con successo alla rete Wi-Fi' + stdout;
-                    console.log('Sending success notification to client ->:', chunk);
-                    this._updateValueCallback(chunk);
-                }
+                // Debug: First run nmcli command separately to check output
+                console.log('Executing WiFi scan command...');
+                exec('nmcli -f ssid,mode,chan,rate,signal,bars,security -t dev wifi', (nmcliErr, nmcliOut, nmcliStderr) => {
+                    if (nmcliErr) {
+                        console.error('ERROR with nmcli command:', nmcliErr);
+                        console.error('STDERR:', nmcliStderr);
+                        if (this._updateValueCallback) {
+                            this._updateValueCallback(Buffer.from(`ERROR with nmcli: ${nmcliErr.message}`));
+                        }
+                        callback(this.RESULT_UNLIKELY_ERROR);
+                        return;
+                    }
 
-                callback(this.RESULT_SUCCESS, chunk);
+                    console.log('Raw nmcli output:', nmcliOut);
+                    
+                    // Now run the full command with jq
+                    const cmd = `nmcli -f ssid,mode,chan,rate,signal,bars,security -t dev wifi | jq -sR 'split("\\n") | map(split(":")) | map({"network": .[0],"mode": .[1],"channel": .[2],"rate": .[3], "signal": .[4], "bars": .[5], "security": .[6]})'`;
+                    console.log('Executing full command with jq:', cmd);
+                    
+                    exec(cmd, (error, stdout, stderr) => {
+                        console.log('Command completed with status:', error ? 'ERROR' : 'SUCCESS');
+                        
+                        if (error) {
+                            console.error(`Error executing command: ${error}`);
+                            console.error(`stderr: ${stderr}`);
+                            if (this._updateValueCallback) {
+                                const message = `Error scanning WiFi networks: ${stderr}`;
+                                console.log('Sending error notification to client ->:', message);
+                                this._updateValueCallback(Buffer.from(message));
+                            }
+                            callback(this.RESULT_UNLIKELY_ERROR);
+                            return;
+                        }
+
+                        console.log('Raw jq output:', stdout);
+                        
+                        if (!stdout || stdout.trim() === '') {
+                            console.error('WARNING: jq command returned empty output');
+                        }
+                        
+                        const stringBase64 = Buffer.from(stdout);
+                        const mtuSize = 20; // Assuming a typical MTU size minus some bytes for headers
+                        const end = Math.min(offset + mtuSize, stringBase64.length);
+
+                        const chunk = stringBase64.slice(offset, end);
+                        console.log('Full data buffer length:', stringBase64.length);
+                        console.log('Sending chunk:', chunk.toString());
+                        console.log('Offset:', offset);
+                        console.log('End:', end);
+                        
+                        if (this._updateValueCallback) {
+                            console.log('Sending success notification to client ->:', chunk);
+                            this._updateValueCallback(chunk);
+                        }
+
+                        callback(this.RESULT_SUCCESS, chunk);
+                    });
+                });
             });
         } catch (error) {
             console.error('Impossibile analizzare le credenziali Wi-Fi:', error);
