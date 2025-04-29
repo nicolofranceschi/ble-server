@@ -153,6 +153,7 @@ sudo systemctl start ble_server.service
 - Verify the host has Bluetooth hardware and it's not blocked: `rfkill list`
 - Check container logs: `docker logs ble-server`
 - If you see "Could not find any Python installation" error during build, the updated Dockerfile includes Python installation to fix this
+- If you see "setcap: not found" error, the updated Dockerfile includes libcap2-bin to fix this
 
 ### Permissions Issues
 - Make sure the caps are set correctly on node binary

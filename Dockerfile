@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     make \
     g++ \
+    libcap2-bin \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
