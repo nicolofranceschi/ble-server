@@ -1,0 +1,22 @@
+version: '3'
+
+services:
+  ble-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ble-server
+    restart: unless-stopped
+    # Required for Bluetooth access from container
+    network_mode: host
+    privileged: true
+    volumes:
+      - /var/run/dbus:/var/run/dbus
+      - /var/run/bluetooth:/var/run/bluetooth
+    devices:
+      - /dev/bluetooth:/dev/bluetooth
+    # For systemd integration (optional)
+    # cgroup: host
+    environment:
+      - NODE_ENV=production
+      # Add any other environment variables here

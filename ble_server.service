@@ -7,9 +7,10 @@
    ExecStart=/usr/local/bin/ble/start_ble_server.sh
    Restart=on-failure
    User=box
-   StandardOutput=syslog
-   StandardError=syslog
+   StandardOutput=journal
+   StandardError=journal
    Environment=NODE_ENV=production
+   AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
    [Install]
    WantedBy=multi-user.target

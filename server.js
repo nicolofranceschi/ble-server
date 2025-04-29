@@ -324,6 +324,11 @@ bleno.on('stateChange', (state) => {
     console.log('Stato Bluetooth: ' + state);
     if (state === 'poweredOn') {
         bleno.startAdvertising('WiFiSetup', ['ffffffff-ffff-ffff-ffff-fffffffffff0']);
+    } else if (state === 'unauthorized') {
+        console.error('Bluetooth adapter state unauthorized. Please check permissions:');
+        console.error('1. Run with proper capabilities: sudo setcap cap_net_raw+eip $(eval readlink -f `which node`)');
+        console.error('2. Or use the provided script: sudo ./run-with-bluetooth-permissions.sh');
+        console.error('See README.md for detailed instructions');
     } else {
         bleno.stopAdvertising();
     }
