@@ -18,13 +18,13 @@ docker compose up -d --build
 
 3. Check container status:
 ```bash
-docker-compose ps
+docker compose ps
 docker logs ble-server
 ```
 
 4. Stop the container:
 ```bash
-docker-compose down
+docker compose down
 ```
 
 ### Prerequisites for Docker
@@ -152,6 +152,7 @@ sudo systemctl start ble_server.service
 - Make sure Docker is running with `--privileged` and `--net=host` (included in docker-compose.yml)
 - Verify the host has Bluetooth hardware and it's not blocked: `rfkill list`
 - Check container logs: `docker logs ble-server`
+- If you see "Could not find any Python installation" error during build, the updated Dockerfile includes Python installation to fix this
 
 ### Permissions Issues
 - Make sure the caps are set correctly on node binary

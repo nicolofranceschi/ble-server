@@ -10,8 +10,16 @@ RUN apt-get update && apt-get install -y \
     jq \
     net-tools \
     network-manager \
+    python3 \
+    python3-pip \
+    build-essential \
+    make \
+    g++ \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Set Python as the default for node-gyp
+ENV PYTHON=/usr/bin/python3
 
 # Create app directory
 WORKDIR /app
@@ -34,7 +42,9 @@ RUN setcap cap_net_raw+eip $(eval readlink -f `which node`)
 # Create a non-root user for running the application
 RUN groupadd -r bluetooth && \
     useradd -r -g bluetooth bluetooth && \
-    usermod -aG bluetooth bluetooth
+    usermod -aG bluetooth bluetooth && \
+    # Add user to dialout for serial port access
+    usermod -aG dialout bluetooth
 
 # Set up udev rules for Bluetooth access
 RUN echo 'SUBSYSTEM=="bluetooth", OWNER="bluetooth"' > /etc/udev/rules.d/50-bluetooth-user.rules
@@ -42,6 +52,9 @@ RUN echo 'SUBSYSTEM=="bluetooth", OWNER="bluetooth"' > /etc/udev/rules.d/50-blue
 # Set appropriate ownership
 RUN mkdir -p /var/run/bluetooth && \
     chown -R bluetooth:bluetooth /var/run/bluetooth
+
+# Give the bluetooth user permission to the node binary location
+RUN mkdir -p /app && chown -R bluetooth:bluetooth /app
 
 # Switch to non-root user
 USER bluetooth
