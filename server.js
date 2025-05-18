@@ -1,5 +1,5 @@
 const bleno = require('@abandonware/bleno');
-const exec = require('child_process').exec;
+const utils = require('./utils');
 
 const BlenoPrimaryService = bleno.PrimaryService;
 const BlenoCharacteristic = bleno.Characteristic;
@@ -8,7 +8,7 @@ class connectWifi extends BlenoCharacteristic {
     constructor() {
         super({
             uuid: 'ffffffff-ffff-ffff-ffff-fffffffffff1',
-            properties: ['write', 'notify'], // Aggiunto 'notify' alle proprietà
+            properties: ['write', 'notify'],
             value: null
         });
 
@@ -27,42 +27,45 @@ class connectWifi extends BlenoCharacteristic {
     }
 
     onWriteRequest(data, offset, withoutResponse, callback) {
-
         console.log('Ricevute credenziali Wi-Fi:', data.toString());
 
         try {
-
             const wifiCredentials = JSON.parse(data.toString());
+            const ssid = wifiCredentials.username;
+            const password = wifiCredentials.password;
 
-            const ssid = wifiCredentials.username.replace(/'/g, "\\'");
-            const password = wifiCredentials.password.replace(/'/g, "\\'");
+            // Use the utility function to connect to WiFi
+            utils.connectToWifi(ssid, password)
+                .then(result => {
+                    if (result.error) {
+                        console.error(`Errore nella connessione al Wi-Fi: ${result.error}`);
+                        if (this._updateValueCallback) {
+                            const message = 'Errore nella connessione al Wi-Fi' + result.stderr;
+                            console.log('Sending error notification to client ->:', message);
+                            this._updateValueCallback(Buffer.from(message));
+                        }
+                        callback(this.RESULT_UNLIKELY_ERROR);
+                        return;
+                    }
 
-            const cmd = `sudo nmcli device wifi connect '${ssid}' password '${password}'`;
-            console.log('Executing Wi-Fi connect command (without showing password):', 
-                         `sudo nmcli device wifi connect '${ssid}' password '********'`);
+                    console.log(`Connesso alla rete Wi-Fi: ${ssid}`);
 
-            exec(cmd, (error, stdout, stderr) => {
-
-                if (error) {
+                    if (this._updateValueCallback) {
+                        const message = 'Connesso con successo alla rete Wi-Fi' + result.stdout;
+                        console.log('Sending success notification to client ->:', message);
+                        this._updateValueCallback(Buffer.from(message));
+                    }
+                    callback("Connesso con successo alla rete Wi-Fi - from response");
+                })
+                .catch(error => {
                     console.error(`Errore nella connessione al Wi-Fi: ${error}`);
                     if (this._updateValueCallback) {
-                        const message = 'Errore nella connessione al Wi-Fi' + stderr;
+                        const message = 'Errore nella connessione al Wi-Fi: ' + error.message;
                         console.log('Sending error notification to client ->:', message);
                         this._updateValueCallback(Buffer.from(message));
                     }
                     callback(this.RESULT_UNLIKELY_ERROR);
-                    return;
-                }
-
-                console.log(`Connesso alla rete Wi-Fi: ${ssid}`);
-
-                if (this._updateValueCallback) {
-                    const message = 'Connesso con successo alla rete Wi-Fi' + stdout;
-                    console.log('Sending success notification to client ->:', message);
-                    this._updateValueCallback(Buffer.from(message));
-                }
-                callback("Connesso con successo alla rete Wi-Fi - from response");
-            });
+                });
         } catch (error) {
             console.error('Impossibile analizzare le credenziali Wi-Fi:', error);
             if (this._updateValueCallback) {
@@ -79,12 +82,13 @@ class handleConnection extends BlenoCharacteristic {
     constructor() {
         super({
             uuid: 'ffffffff-ffff-ffff-ffff-fffffffffff2',
-            properties: ['write', 'notify'], // Aggiunto 'notify' alle proprietà
+            properties: ['write', 'notify'],
             value: null
         });
 
         this._value = Buffer.alloc(0);
         this._updateValueCallback = null;
+        this._cachedData = null;
     }
 
     onSubscribe(maxValueSize, updateValueCallback) {
@@ -101,86 +105,69 @@ class handleConnection extends BlenoCharacteristic {
         console.log('Sono connesso ?', data.toString());
 
         try {
-            // Debug: Check if jq is installed
-            exec('which jq', (err, jqPath, stderr) => {
-                if (err) {
-                    console.error('ERROR: jq is not installed or not in PATH:', err);
-                    if (this._updateValueCallback) {
-                        this._updateValueCallback(Buffer.from('ERROR: jq command not found. Install with: apt-get install jq'));
-                    }
-                    callback(this.RESULT_UNLIKELY_ERROR);
-                    return;
-                }
-                
-                console.log('jq found at:', jqPath.trim());
-                
-                const stepJson = JSON.parse(data.toString());
-                const offsetString = stepJson.offset.replace(/'/g, "\\'");
-                const offset = parseInt(offsetString);
-
-                // Debug: First run nmcli command separately to check output
-                console.log('Executing network device status command...');
-                exec('sudo nmcli -f TYPE,STATE -t d', (nmcliErr, nmcliOut, nmcliStderr) => {
-                    if (nmcliErr) {
-                        console.error('ERROR with nmcli command:', nmcliErr);
-                        console.error('STDERR:', nmcliStderr);
+            // First check if jq is installed
+            utils.checkJqInstalled()
+                .then(jqInstalled => {
+                    if (!jqInstalled) {
+                        console.error('ERROR: jq is not installed or not in PATH');
                         if (this._updateValueCallback) {
-                            this._updateValueCallback(Buffer.from(`ERROR with nmcli: ${nmcliErr.message}`));
+                            this._updateValueCallback(Buffer.from('ERROR: jq command not found. Install with: apt-get install jq'));
                         }
                         callback(this.RESULT_UNLIKELY_ERROR);
                         return;
                     }
 
-                    console.log('Raw nmcli device status output:', nmcliOut);
-                    
-                    // Enhanced command to also report connection type (wifi vs ethernet)
-                    const cmd = `sudo nmcli -f TYPE,STATE -t d | sudo jq -sR 'split("\\n") | map(split(":")) | map({"TYPE": .[0],"STATE": .[1], "CONNECTION_TYPE": (if .[0] == "ethernet" and .[1] == "connected" then "ethernet" elif .[0] == "wifi" and .[1] == "connected" then "wifi" else null end)})'`;
-                    console.log('Executing full command with jq:', cmd);
-                    
-                    exec(cmd, (error, stdout, stderr) => {
-                        console.log('Command completed with status:', error ? 'ERROR' : 'SUCCESS');
-                        
-                        if (error) {
-                            console.error(`Error executing command: ${error}`);
-                            console.error(`stderr: ${stderr}`);
+                    const stepJson = JSON.parse(data.toString());
+                    const offsetString = stepJson.offset.replace(/'/g, "\\'");
+                    const offset = parseInt(offsetString);
+
+                    // If offset is 0, we need to fetch fresh data or use very recent cache
+                    const forceRefresh = offset === 0;
+
+                    // Use the utility function to get network information
+                    utils.getNetworkInfo({ forceRefresh })
+                        .then(networkInfo => {
+                            // Cache the response as JSON string
+                            const jsonResponse = JSON.stringify(networkInfo);
+                            this._cachedData = Buffer.from(jsonResponse);
+
+                            // Get appropriate chunk
+                            const chunk = utils.getChunk(this._cachedData, offset);
+                            
+                            console.log('Full data buffer length:', this._cachedData.length);
+                            console.log('Sending chunk:', chunk.toString());
+                            console.log('Offset:', offset);
+                            console.log('End:', offset + chunk.length);
+                            
                             if (this._updateValueCallback) {
-                                const message = `Error checking network devices: ${stderr}`;
+                                console.log('Sending success notification to client ->:', chunk);
+                                this._updateValueCallback(chunk);
+                            }
+
+                            callback(this.RESULT_SUCCESS, chunk);
+                        })
+                        .catch(error => {
+                            console.error(`Error getting network info: ${error}`);
+                            if (this._updateValueCallback) {
+                                const message = `Error checking network devices: ${error.message}`;
                                 console.log('Sending error notification to client ->:', message);
                                 this._updateValueCallback(Buffer.from(message));
                             }
                             callback(this.RESULT_UNLIKELY_ERROR);
-                            return;
-                        }
-
-                        console.log('Raw jq output:', stdout);
-                        
-                        if (!stdout || stdout.trim() === '') {
-                            console.error('WARNING: jq command returned empty output');
-                        }
-                        
-                        const stringBase64 = Buffer.from(stdout);
-                        const mtuSize = 20; // Assuming a typical MTU size minus some bytes for headers
-                        const end = Math.min(offset + mtuSize, stringBase64.length);
-
-                        const chunk = stringBase64.slice(offset, end);
-                        console.log('Full data buffer length:', stringBase64.length);
-                        console.log('Sending chunk:', chunk.toString());
-                        console.log('Offset:', offset);
-                        console.log('End:', end);
-                        
-                        if (this._updateValueCallback) {
-                            console.log('Sending success notification to client ->:', chunk);
-                            this._updateValueCallback(chunk);
-                        }
-
-                        callback(this.RESULT_SUCCESS, chunk);
-                    });
+                        });
+                })
+                .catch(error => {
+                    console.error(`Error checking jq installation: ${error}`);
+                    if (this._updateValueCallback) {
+                        const message = `Error in prerequisites check: ${error.message}`;
+                        this._updateValueCallback(Buffer.from(message));
+                    }
+                    callback(this.RESULT_UNLIKELY_ERROR);
                 });
-            });
         } catch (error) {
-            console.error('Impossibile analizzare le credenziali Wi-Fi:', error);
+            console.error('Impossibile analizzare la richiesta:', error);
             if (this._updateValueCallback) {
-                const message = 'Errore nel parsing delle credenziali';
+                const message = 'Errore nel parsing della richiesta';
                 console.log('Sending error notification to client ->:', message);
                 this._updateValueCallback(Buffer.from(message));
             }
@@ -193,12 +180,14 @@ class listSSID extends BlenoCharacteristic {
     constructor() {
         super({
             uuid: 'ffffffff-ffff-ffff-ffff-fffffffffff3',
-            properties: ['write', 'notify'], // Aggiunto 'notify' alle proprietà
+            properties: ['write', 'notify'],
             value: null
         });
 
         this._value = Buffer.alloc(0);
         this._updateValueCallback = null;
+        this._cachedNetworks = null;
+        this._lastScanTime = 0;
     }
 
     onSubscribe(maxValueSize, updateValueCallback) {
@@ -215,124 +204,65 @@ class listSSID extends BlenoCharacteristic {
         console.log('Richiesta liste delle reti Wi-Fi', data.toString());
 
         try {
-            // Debug: Check if jq is installed
-            exec('which jq', (err, jqPath, stderr) => {
-                if (err) {
-                    console.error('ERROR: jq is not installed or not in PATH:', err);
-                    if (this._updateValueCallback) {
-                        this._updateValueCallback(Buffer.from('ERROR: jq command not found. Install with: apt-get install jq'));
-                    }
-                    callback(this.RESULT_UNLIKELY_ERROR);
-                    return;
-                }
-                
-                console.log('jq found at:', jqPath.trim());
-                
-                const requestData = JSON.parse(data.toString());
-                
-                // Verifichiamo se è richiesto un indice specifico
-                if ('index' in requestData) {
-                    let networkIndex;
-                    
-                    try {
-                        networkIndex = parseInt(requestData.index);
-                        console.log(`Requested network at index: ${networkIndex}`);
-                        
-                        if (isNaN(networkIndex)) {
-                            throw new Error("Invalid network index");
-                        }
-                    } catch (indexError) {
-                        console.error('Error parsing network index:', indexError);
+            // First check if jq is installed
+            utils.checkJqInstalled()
+                .then(jqInstalled => {
+                    if (!jqInstalled) {
+                        console.error('ERROR: jq is not installed or not in PATH');
                         if (this._updateValueCallback) {
-                            this._updateValueCallback(Buffer.from('Invalid network index format'));
+                            this._updateValueCallback(Buffer.from('ERROR: jq command not found. Install with: apt-get install jq'));
                         }
                         callback(this.RESULT_UNLIKELY_ERROR);
                         return;
                     }
-                    
-                    // Aggiungiamo un flag di refresh per forzare una nuova scansione se necessario
-                    const shouldRefresh = requestData.refresh === true || networkIndex === 0;
-                    
-                    // Comando di scansione con timeout più lungo per reti più deboli
-                    const scanCommand = shouldRefresh ? 
-                        'sudo nmcli --wait 5 dev wifi rescan && sudo nmcli -f ssid,mode,chan,rate,signal,bars,security -t dev wifi' : 
-                        'sudo nmcli -f ssid,mode,chan,rate,signal,bars,security -t dev wifi';
-                    
-                    console.log('Executing WiFi scan command:', scanCommand);
-                    
-                    // Scan per le reti Wi-Fi
-                    exec(scanCommand, (nmcliErr, nmcliOut, nmcliStderr) => {
-                        if (nmcliErr) {
-                            console.error('ERROR with nmcli command:', nmcliErr);
-                            console.error('STDERR:', nmcliStderr);
+
+                    const requestData = JSON.parse(data.toString());
+
+                    // Handle the index-based request (newer approach)
+                    if ('index' in requestData) {
+                        let networkIndex;
+                        
+                        try {
+                            networkIndex = parseInt(requestData.index);
+                            console.log(`Requested network at index: ${networkIndex}`);
+                            
+                            if (isNaN(networkIndex)) {
+                                throw new Error("Invalid network index");
+                            }
+                        } catch (indexError) {
+                            console.error('Error parsing network index:', indexError);
                             if (this._updateValueCallback) {
-                                this._updateValueCallback(Buffer.from(`ERROR with nmcli: ${nmcliErr.message}`));
+                                this._updateValueCallback(Buffer.from('Invalid network index format'));
                             }
                             callback(this.RESULT_UNLIKELY_ERROR);
                             return;
                         }
                         
-                        if (!nmcliOut || nmcliOut.trim() === '') {
-                            console.warn('WARNING: nmcli returned empty output');
-                            // Invia un segnale di fine lista anche se la risposta è vuota
-                            const endBuffer = Buffer.from("end");
-                            if (this._updateValueCallback) {
-                                this._updateValueCallback(endBuffer);
-                            }
-                            callback(this.RESULT_SUCCESS, endBuffer);
-                            return;
-                        }
+                        // Force a fresh scan if requested or if this is the first network request
+                        const shouldRefresh = requestData.refresh === true || networkIndex === 0;
+                        const now = Date.now();
+                        const timeSinceLastScan = now - this._lastScanTime;
                         
-                        // Scanning WiFi networks
-                        console.log('Scanning WiFi networks...');
-                        
-                        // Reduced command to only get essential WiFi network data
-                        const cmd = `sudo nmcli -f ssid,signal,security -t dev wifi | sudo jq -sR 'split("\\n") | map(select(length > 0)) | map(split(":")) | map(select(length >= 3)) | map({"network": .[0],"signal": .[1], "security": .[2]})'`;
-                        
-                        exec(cmd, (error, stdout, stderr) => {
-                            if (error) {
-                                console.error(`Error executing command: ${error}`);
-                                if (this._updateValueCallback) {
-                                    const message = `Error scanning WiFi networks: ${stderr}`;
-                                    this._updateValueCallback(Buffer.from(message));
-                                }
-                                callback(this.RESULT_UNLIKELY_ERROR);
-                                return;
-                            }
-                            
-                            try {
-                                // Verifica che l'output sia valido
-                                if (!stdout || stdout.trim() === '') {
-                                    console.log('No WiFi networks found');
-                                    const endBuffer = Buffer.from("end");
-                                    if (this._updateValueCallback) {
-                                        this._updateValueCallback(endBuffer);
-                                    }
-                                    callback(this.RESULT_SUCCESS, endBuffer);
-                                    return;
+                        // Get networks, with scan if needed
+                        utils.getWifiNetworks({ 
+                            scan: shouldRefresh && timeSinceLastScan > 10000, // Scan if requested and > 10 seconds since last scan
+                            forceRefresh: shouldRefresh,
+                            ttl: 30000 // 30 seconds cache for WiFi list
+                        })
+                            .then(networks => {
+                                // Update the cache and scan timestamp
+                                this._cachedNetworks = networks;
+                                if (shouldRefresh && timeSinceLastScan > 10000) {
+                                    this._lastScanTime = now;
                                 }
                                 
-                                // Parsing dell'array completo
-                                const networks = JSON.parse(stdout);
+                                console.log(`WiFi scan: ${networks.length} networks, sending index ${networkIndex}`);
                                 
-                                // Filtriamo le reti valide (con nome non vuoto)
-                                const validNetworks = networks.filter(n => n && n.network && n.network.trim() !== '');
-                                
-                                // Ordiniamo per potenza del segnale
-                                validNetworks.sort((a, b) => {
-                                    const signalA = a.signal ? parseInt(a.signal) : 0;
-                                    const signalB = b.signal ? parseInt(b.signal) : 0;
-                                    return signalB - signalA; // Ordine decrescente
-                                });
-                                
-                                // Log once with count instead of detailed info
-                                console.log(`WiFi scan: ${validNetworks.length} networks, sending index ${networkIndex}`);
-                                
-                                // Accesso al network specifico
-                                if (networkIndex < validNetworks.length) {
-                                    const network = validNetworks[networkIndex];
+                                // Check if the requested network exists
+                                if (networkIndex < networks.length) {
+                                    const network = networks[networkIndex];
                                     
-                                    // Verifichiamo che il network abbia un nome valido
+                                    // Verify the network has a valid name
                                     if (!network.network || network.network.trim() === '') {
                                         const skipBuffer = Buffer.from(JSON.stringify({skip: true}));
                                         if (this._updateValueCallback) {
@@ -342,7 +272,7 @@ class listSSID extends BlenoCharacteristic {
                                         return;
                                     }
                                     
-                                    // Inviamo il singolo oggetto come JSON
+                                    // Send the single network as JSON
                                     const responseData = JSON.stringify(network);
                                     const responseBuffer = Buffer.from(responseData);
                                     
@@ -352,7 +282,7 @@ class listSSID extends BlenoCharacteristic {
                                     
                                     callback(this.RESULT_SUCCESS, responseBuffer);
                                 } else {
-                                    // Nessun'altra rete disponibile
+                                    // No more networks available
                                     const endBuffer = Buffer.from("end");
                                     
                                     if (this._updateValueCallback) {
@@ -361,97 +291,74 @@ class listSSID extends BlenoCharacteristic {
                                     
                                     callback(this.RESULT_SUCCESS, endBuffer);
                                 }
-                            } catch (parseError) {
-                                console.error('Error parsing WiFi networks:', parseError);
+                            })
+                            .catch(error => {
+                                console.error(`Error getting WiFi networks: ${error}`);
                                 if (this._updateValueCallback) {
-                                    const message = 'Error parsing WiFi networks list';
+                                    const message = `Error scanning WiFi networks: ${error.message}`;
                                     this._updateValueCallback(Buffer.from(message));
                                 }
                                 callback(this.RESULT_UNLIKELY_ERROR);
-                            }
-                        });
-                    });
-                } else {
-                    // Vecchio modo - per retrocompatibilità
-                    const offsetString = requestData.offset.replace(/'/g, "\\'");
-                    const offset = parseInt(offsetString);
-
-                    // Debug: First run nmcli command separately to check output
-                    console.log('Executing WiFi scan command...');
-                    exec('sudo nmcli -f ssid,mode,chan,rate,signal,bars,security -t dev wifi', (nmcliErr, nmcliOut, nmcliStderr) => {
-                        if (nmcliErr) {
-                            console.error('ERROR with nmcli command:', nmcliErr);
-                            console.error('STDERR:', nmcliStderr);
-                            if (this._updateValueCallback) {
-                                this._updateValueCallback(Buffer.from(`ERROR with nmcli: ${nmcliErr.message}`));
-                            }
-                            callback(this.RESULT_UNLIKELY_ERROR);
-                            return;
-                        }
-
-                        console.log('Raw nmcli output:', nmcliOut);
+                            });
+                    } else {
+                        // Legacy chunked approach
+                        const offsetString = requestData.offset.replace(/'/g, "\\'");
+                        const offset = parseInt(offsetString);
                         
-                        // Now run the full command with jq
-                        const cmd = `sudo nmcli -f ssid,mode,chan,rate,signal,bars,security -t dev wifi | sudo jq -sR 'split("\\n") | map(split(":")) | map({"network": .[0],"mode": .[1],"channel": .[2],"rate": .[3], "signal": .[4], "bars": .[5], "security": .[6]})'`;
-                        console.log('Executing full command with jq:', cmd);
+                        // We need fresh data if offset is 0
+                        const forceRefresh = offset === 0;
                         
-                        exec(cmd, (error, stdout, stderr) => {
-                            console.log('Command completed with status:', error ? 'ERROR' : 'SUCCESS');
-                            
-                            if (error) {
-                                console.error(`Error executing command: ${error}`);
-                                console.error(`stderr: ${stderr}`);
+                        // Get networks, with scan if needed
+                        utils.getWifiNetworks({ 
+                            scan: forceRefresh,
+                            forceRefresh,
+                            ttl: 30000 // 30 seconds cache for WiFi list
+                        })
+                            .then(networks => {
+                                // Update cache and scan timestamp if this is a fresh request
+                                if (forceRefresh) {
+                                    this._cachedNetworks = networks;
+                                    this._lastScanTime = Date.now();
+                                }
+                                
+                                // Prepare the full response as JSON string
+                                const jsonResponse = JSON.stringify(networks);
+                                const responseBuffer = Buffer.from(jsonResponse);
+                                
+                                // Get the appropriate chunk
+                                const chunk = utils.getChunk(responseBuffer, offset);
+                                
+                                console.log('Full data buffer length:', responseBuffer.length);
+                                console.log('Sending chunk:', chunk.toString());
+                                console.log('Offset:', offset);
+                                console.log('End:', offset + chunk.length);
+                                
                                 if (this._updateValueCallback) {
-                                    const message = `Error scanning WiFi networks: ${stderr}`;
+                                    console.log('Sending success notification to client ->:', chunk);
+                                    this._updateValueCallback(chunk);
+                                }
+
+                                callback(this.RESULT_SUCCESS, chunk);
+                            })
+                            .catch(error => {
+                                console.error(`Error getting WiFi networks: ${error}`);
+                                if (this._updateValueCallback) {
+                                    const message = `Error scanning WiFi networks: ${error.message}`;
                                     console.log('Sending error notification to client ->:', message);
                                     this._updateValueCallback(Buffer.from(message));
                                 }
                                 callback(this.RESULT_UNLIKELY_ERROR);
-                                return;
-                            }
-
-                            console.log('Raw jq output:', stdout);
-                            
-                            if (!stdout || stdout.trim() === '') {
-                                console.error('WARNING: jq command returned empty output');
-                                if (this._updateValueCallback) {
-                                    const message = 'No WiFi networks found';
-                                    console.log('Sending notification to client ->:', message);
-                                    this._updateValueCallback(Buffer.from(message));
-                                }
-                                callback(this.RESULT_UNLIKELY_ERROR);
-                                return;
-                            }
-                            
-                            // Try to parse the JSON to validate it before sending
-                            try {
-                                const testParse = JSON.parse(stdout);
-                                console.log(`Successfully parsed output with ${testParse.length} networks`);
-                            } catch (parseError) {
-                                console.error('Error parsing WiFi network data:', parseError);
-                                // Continue anyway - the client will handle parsing issues
-                            }
-                            
-                            const stringBase64 = Buffer.from(stdout);
-                            const mtuSize = 20; // Assuming a typical MTU size minus some bytes for headers
-                            const end = Math.min(offset + mtuSize, stringBase64.length);
-
-                            const chunk = stringBase64.slice(offset, end);
-                            console.log('Full data buffer length:', stringBase64.length);
-                            console.log('Sending chunk:', chunk.toString());
-                            console.log('Offset:', offset);
-                            console.log('End:', end);
-                            
-                            if (this._updateValueCallback) {
-                                console.log('Sending success notification to client ->:', chunk);
-                                this._updateValueCallback(chunk);
-                            }
-
-                            callback(this.RESULT_SUCCESS, chunk);
-                        });
-                    });
-                }
-            });
+                            });
+                    }
+                })
+                .catch(error => {
+                    console.error(`Error checking jq installation: ${error}`);
+                    if (this._updateValueCallback) {
+                        const message = `Error in prerequisites check: ${error.message}`;
+                        this._updateValueCallback(Buffer.from(message));
+                    }
+                    callback(this.RESULT_UNLIKELY_ERROR);
+                });
         } catch (error) {
             console.error('Impossibile analizzare la richiesta:', error);
             if (this._updateValueCallback) {
@@ -468,12 +375,13 @@ class getIp extends BlenoCharacteristic {
     constructor() {
         super({
             uuid: 'ffffffff-ffff-ffff-ffff-fffffffffff4',
-            properties: ['write', 'notify'], // Aggiunto 'notify' alle proprietà
+            properties: ['write', 'notify'],
             value: null
         });
 
         this._value = Buffer.alloc(0);
         this._updateValueCallback = null;
+        this._cachedIp = null;
     }
 
     onSubscribe(maxValueSize, updateValueCallback) {
@@ -487,48 +395,38 @@ class getIp extends BlenoCharacteristic {
     }
 
     onWriteRequest(data, offset, withoutResponse, callback) {
-
-        console.log('Sono connesso ?', data.toString());
+        console.log('Richiesta indirizzo IP', data.toString());
 
         try {
+            // Use the utility function to get IP address
+            utils.getIpAddress()
+                .then(ipAddress => {
+                    console.log(`IP Address: ${ipAddress}`);
+                    
+                    // Cache the IP
+                    this._cachedIp = ipAddress;
+                    
+                    // Send response directly (small enough not to need chunking)
+                    const responseBuffer = Buffer.from(ipAddress);
+                    
+                    if (this._updateValueCallback) {
+                        this._updateValueCallback(responseBuffer);
+                    }
 
-            const stepJson = JSON.parse(data.toString());
-
-            const offsetString = stepJson.offset.replace(/'/g, "\\'");
-
-            const offset = parseInt(offsetString);
-
-            // Simplified IP command
-            const cmd = `hostname -I | awk '{print $1}'`;
-
-            exec(cmd, (error, stdout, stderr) => {
-                if (error) {
+                    callback(this.RESULT_SUCCESS, responseBuffer);
+                })
+                .catch(error => {
                     console.error(`Error getting IP: ${error}`);
                     if (this._updateValueCallback) {
                         const message = 'Error getting IP address';
                         this._updateValueCallback(Buffer.from(message));
                     }
                     callback(this.RESULT_UNLIKELY_ERROR);
-                    return;
-                }
-
-                // Get just the IP
-                const ipAddress = stdout.trim();
-                console.log(`IP Address: ${ipAddress}`);
-                
-                // Send response directly without chunking since IPs are small
-                const responseBuffer = Buffer.from(ipAddress);
-                
-                if (this._updateValueCallback) {
-                    this._updateValueCallback(responseBuffer);
-                }
-
-                callback(this.RESULT_SUCCESS, responseBuffer);
-            });
+                });
         } catch (error) {
-            console.error('Impossibile analizzare le credenziali Wi-Fi:', error);
+            console.error('Impossibile analizzare la richiesta IP:', error);
             if (this._updateValueCallback) {
-                const message = 'Errore nel parsing delle credenziali';
+                const message = 'Errore nel parsing della richiesta';
                 console.log('Sending error notification to client ->:', message);
                 this._updateValueCallback(Buffer.from(message));
             }
@@ -567,104 +465,77 @@ class changeWifi extends BlenoCharacteristic {
             
             if (changeRequest.action === 'change') {
                 // User wants to change to a different WiFi network
-                const ssid = changeRequest.ssid.replace(/'/g, "\\'");
-                const password = changeRequest.password.replace(/'/g, "\\'");
+                const ssid = changeRequest.ssid;
+                const password = changeRequest.password;
                 
-                const cmd = `sudo nmcli device wifi connect '${ssid}' password '${password}'`;
-                console.log('Executing Wi-Fi change command (without showing password):', 
-                            `sudo nmcli device wifi connect '${ssid}' password '********'`);
-                
-                exec(cmd, (error, stdout, stderr) => {
-                    if (error) {
-                        console.error(`Errore nel cambio rete Wi-Fi: ${error}`);
-                        console.error(`STDERR: ${stderr}`);
+                // Use the utility function to connect to WiFi
+                utils.connectToWifi(ssid, password)
+                    .then(result => {
+                        if (result.error) {
+                            console.error(`Errore nel cambio rete Wi-Fi: ${result.error}`);
+                            console.error(`STDERR: ${result.stderr}`);
+                            if (this._updateValueCallback) {
+                                const message = 'Errore nel cambio rete Wi-Fi: ' + result.stderr;
+                                console.log('Sending error notification to client ->:', message);
+                                this._updateValueCallback(Buffer.from(message));
+                            }
+                            callback(this.RESULT_UNLIKELY_ERROR);
+                            return;
+                        }
+
+                        console.log(`Connesso alla nuova rete Wi-Fi: ${ssid}`);
+                        console.log(`STDOUT: ${result.stdout}`);
+                        
                         if (this._updateValueCallback) {
-                            const message = 'Errore nel cambio rete Wi-Fi: ' + stderr;
-                            console.log('Sending error notification to client ->:', message);
+                            const message = 'Connesso con successo alla nuova rete Wi-Fi: ' + result.stdout;
+                            console.log('Sending success notification to client ->:', message);
+                            this._updateValueCallback(Buffer.from(message));
+                        }
+                        callback(this.RESULT_SUCCESS);
+                    })
+                    .catch(error => {
+                        console.error(`Error connecting to WiFi: ${error}`);
+                        if (this._updateValueCallback) {
+                            const message = `Error connecting to WiFi: ${error.message}`;
                             this._updateValueCallback(Buffer.from(message));
                         }
                         callback(this.RESULT_UNLIKELY_ERROR);
-                        return;
-                    }
-
-                    console.log(`Connesso alla nuova rete Wi-Fi: ${ssid}`);
-                    console.log(`STDOUT: ${stdout}`);
-                    
-                    if (this._updateValueCallback) {
-                        const message = 'Connesso con successo alla nuova rete Wi-Fi: ' + stdout;
-                        console.log('Sending success notification to client ->:', message);
-                        this._updateValueCallback(Buffer.from(message));
-                    }
-                    callback(this.RESULT_SUCCESS);
-                });
+                    });
             } else if (changeRequest.action === 'disconnect') {
                 // User wants to disconnect from current WiFi
                 console.log('Executing Wi-Fi disconnect command');
                 
-                // Direct approach to disconnect all wireless connections
-                exec('sudo nmcli radio wifi off && sleep 1 && sudo nmcli radio wifi on', (error, stdout, stderr) => {
-                    if (error) {
-                        console.error(`Errore nella disconnessione Wi-Fi: ${error}`);
-                        console.error(`STDERR: ${stderr}`);
-                        
-                        // Try fallback method if the radio command fails
-                        exec('sudo nmcli -t -f DEVICE,TYPE,STATE device | grep wifi | grep connected', (checkErr, checkOut, checkStderr) => {
-                            if (checkErr || !checkOut || checkOut.trim() === '') {
-                                console.log('No connected wifi devices found or error checking');
-                                if (this._updateValueCallback) {
-                                    const message = 'Nessun dispositivo Wi-Fi connesso trovato o errore: ' + (checkStderr || stderr);
-                                    this._updateValueCallback(Buffer.from(message));
-                                }
-                                callback(this.RESULT_UNLIKELY_ERROR);
-                                return;
+                // Use the utility function to disconnect from WiFi
+                utils.disconnectWifi()
+                    .then(result => {
+                        if (result.error) {
+                            console.error(`Errore nella disconnessione Wi-Fi: ${result.error}`);
+                            console.error(`STDERR: ${result.stderr}`);
+                            if (this._updateValueCallback) {
+                                const message = 'Errore nella disconnessione Wi-Fi: ' + result.stderr;
+                                this._updateValueCallback(Buffer.from(message));
                             }
-                            
-                            // Parse the device name from the output
-                            const devices = checkOut.split('\n').filter(line => line.trim() !== '');
-                            if (devices.length === 0) {
-                                console.log('No connected wifi devices found');
-                                if (this._updateValueCallback) {
-                                    const message = 'Nessun dispositivo Wi-Fi connesso trovato';
-                                    this._updateValueCallback(Buffer.from(message));
-                                }
-                                callback(this.RESULT_SUCCESS);
-                                return;
-                            }
-                            
-                            // Extract device name and try to disconnect
-                            const deviceName = devices[0].split(':')[0];
-                            console.log(`Found connected wifi device: ${deviceName}, trying disconnect`);
-                            
-                            exec(`sudo nmcli device disconnect ${deviceName}`, (discErr, discOut, discStderr) => {
-                                if (discErr) {
-                                    console.error(`Error disconnecting device ${deviceName}: ${discErr}`);
-                                    if (this._updateValueCallback) {
-                                        const message = `Errore disconnettendo ${deviceName}: ${discStderr}`;
-                                        this._updateValueCallback(Buffer.from(message));
-                                    }
-                                    callback(this.RESULT_UNLIKELY_ERROR);
-                                } else {
-                                    console.log(`Disconnected ${deviceName} successfully`);
-                                    if (this._updateValueCallback) {
-                                        const message = 'Disconnesso con successo dalla rete Wi-Fi';
-                                        this._updateValueCallback(Buffer.from(message));
-                                    }
-                                    callback(this.RESULT_SUCCESS);
-                                }
-                            });
-                        });
-                        return;
-                    }
+                            callback(this.RESULT_UNLIKELY_ERROR);
+                            return;
+                        }
 
-                    console.log('Disconnesso dalla rete Wi-Fi con successo (radio method)');
-                    
-                    if (this._updateValueCallback) {
-                        const message = 'Disconnesso con successo dalla rete Wi-Fi';
-                        console.log('Sending success notification to client ->:', message);
-                        this._updateValueCallback(Buffer.from(message));
-                    }
-                    callback(this.RESULT_SUCCESS);
-                });
+                        console.log('Disconnesso dalla rete Wi-Fi con successo');
+                        
+                        if (this._updateValueCallback) {
+                            const message = 'Disconnesso con successo dalla rete Wi-Fi';
+                            console.log('Sending success notification to client ->:', message);
+                            this._updateValueCallback(Buffer.from(message));
+                        }
+                        callback(this.RESULT_SUCCESS);
+                    })
+                    .catch(error => {
+                        console.error(`Error disconnecting from WiFi: ${error}`);
+                        if (this._updateValueCallback) {
+                            const message = `Error disconnecting from WiFi: ${error.message}`;
+                            this._updateValueCallback(Buffer.from(message));
+                        }
+                        callback(this.RESULT_UNLIKELY_ERROR);
+                    });
             } else {
                 console.error('Azione non supportata');
                 if (this._updateValueCallback) {
@@ -696,6 +567,7 @@ class getNetworkInfo extends BlenoCharacteristic {
 
         this._value = Buffer.alloc(0);
         this._updateValueCallback = null;
+        this._cachedData = null;
     }
 
     onSubscribe(maxValueSize, updateValueCallback) {
@@ -712,110 +584,78 @@ class getNetworkInfo extends BlenoCharacteristic {
         console.log('Requested network information', data.toString());
 
         try {
-            // Debug: Check if jq is installed
-            exec('which jq', (err, jqPath, stderr) => {
-                if (err) {
-                    console.error('ERROR: jq is not installed or not in PATH:', err);
-                    if (this._updateValueCallback) {
-                        this._updateValueCallback(Buffer.from('ERROR: jq command not found. Install with: apt-get install jq'));
-                    }
-                    callback(this.RESULT_UNLIKELY_ERROR);
-                    return;
-                }
-                
-                console.log('jq found at:', jqPath.trim());
-                
-                const stepJson = JSON.parse(data.toString());
-                const offsetString = stepJson.offset.replace(/'/g, "\\'");
-                const offset = parseInt(offsetString);
-
-                // Debug: First run nmcli command separately to check output
-                console.log('Executing network info command...');
-                exec('sudo nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device', (nmcliErr, nmcliOut, nmcliStderr) => {
-                    if (nmcliErr) {
-                        console.error('ERROR with nmcli command:', nmcliErr);
-                        console.error('STDERR:', nmcliStderr);
+            // First check if jq is installed
+            utils.checkJqInstalled()
+                .then(jqInstalled => {
+                    if (!jqInstalled) {
+                        console.error('ERROR: jq is not installed or not in PATH');
                         if (this._updateValueCallback) {
-                            this._updateValueCallback(Buffer.from(`ERROR with nmcli: ${nmcliErr.message}`));
+                            this._updateValueCallback(Buffer.from('ERROR: jq command not found. Install with: apt-get install jq'));
                         }
                         callback(this.RESULT_UNLIKELY_ERROR);
                         return;
                     }
 
-                    // Reduced logging
-                    console.log('Getting network info...');
-                    
-                    // Simplified command to get ONLY the connected devices with minimal data
-                    const cmd = `sudo nmcli -t -f TYPE,STATE,CONNECTION device | grep connected | sudo jq -sR 'split("\\n") | map(select(length > 0)) | map(split(":")) | map({TYPE: .[0], STATE: .[1], CONNECTION: .[2]}) | map(select(.TYPE == "wifi" or .TYPE == "ethernet"))'`;
-                    
-                    exec(cmd, (error, stdout, stderr) => {
-                        if (error) {
-                            console.error(`Error executing command: ${error}`);
-                            if (this._updateValueCallback) {
-                                const message = `Error retrieving network info: ${stderr}`;
-                                this._updateValueCallback(Buffer.from(message));
-                            }
-                            callback(this.RESULT_UNLIKELY_ERROR);
-                            return;
-                        }
+                    const stepJson = JSON.parse(data.toString());
+                    const offsetString = stepJson.offset.replace(/'/g, "\\'");
+                    const offset = parseInt(offsetString);
 
-                        // Process data to make it even smaller
-                        try {
-                            const devices = JSON.parse(stdout);
+                    // If offset is 0, we need to fetch fresh data or use very recent cache
+                    const forceRefresh = offset === 0;
+
+                    // Use the utility function to get network information
+                    utils.getNetworkInfo({ forceRefresh })
+                        .then(networkInfo => {
+                            // Process data to make it even smaller if needed
+                            const minimizedResponse = networkInfo.map(device => ({
+                                TYPE: device.TYPE,
+                                STATE: "connected",
+                                CONNECTION: device.CONNECTION || device.TYPE,
+                                CONNECTION_TYPE: device.TYPE
+                            }));
                             
-                            // Create a much smaller response with just what we need
-                            const minimizedResponse = [];
-                            
-                            // Add only wifi and ethernet connections that are actually connected
-                            devices.forEach(device => {
-                                if (device.TYPE && (device.TYPE === "wifi" || device.TYPE === "ethernet") && 
-                                    device.STATE && device.STATE.includes("connected")) {
-                                    
-                                    // Add connection type for client detection
-                                    minimizedResponse.push({
-                                        TYPE: device.TYPE,
-                                        STATE: "connected",
-                                        CONNECTION: device.CONNECTION || device.TYPE,
-                                        CONNECTION_TYPE: device.TYPE  // Explicitly set the connection type
-                                    });
-                                }
-                            });
-                            
-                            // Convert to string and send in one chunk if possible
-                            const responseJson = JSON.stringify(minimizedResponse);
-                            const responseBuffer = Buffer.from(responseJson);
-                            
+                            // Cache the response as JSON string
+                            const jsonResponse = JSON.stringify(minimizedResponse);
+                            this._cachedData = Buffer.from(jsonResponse);
+
                             // Send entire response if possible, otherwise chunk it
-                            if (responseBuffer.length <= 20 || offset >= responseBuffer.length) {
+                            if (this._cachedData.length <= 20 || offset >= this._cachedData.length) {
                                 if (this._updateValueCallback) {
-                                    this._updateValueCallback(responseBuffer);
+                                    this._updateValueCallback(this._cachedData);
                                 }
-                                callback(this.RESULT_SUCCESS, responseBuffer);
+                                callback(this.RESULT_SUCCESS, this._cachedData);
                             } else {
-                                const mtuSize = 20;
-                                const end = Math.min(offset + mtuSize, responseBuffer.length);
-                                const chunk = responseBuffer.slice(offset, end);
+                                // Get appropriate chunk
+                                const chunk = utils.getChunk(this._cachedData, offset);
+                                
+                                console.log('Full data buffer length:', this._cachedData.length);
+                                console.log('Sending chunk:', chunk.toString());
+                                console.log('Offset:', offset);
+                                console.log('End:', offset + chunk.length);
                                 
                                 if (this._updateValueCallback) {
                                     this._updateValueCallback(chunk);
                                 }
                                 callback(this.RESULT_SUCCESS, chunk);
                             }
-                        } catch (e) {
-                            // Fallback to original method if JSON parsing fails
-                            const stringBase64 = Buffer.from(stdout);
-                            const mtuSize = 20;
-                            const end = Math.min(offset + mtuSize, stringBase64.length);
-                            const chunk = stringBase64.slice(offset, end);
-                            
+                        })
+                        .catch(error => {
+                            console.error(`Error getting network info: ${error}`);
                             if (this._updateValueCallback) {
-                                this._updateValueCallback(chunk);
+                                const message = `Error retrieving network info: ${error.message}`;
+                                this._updateValueCallback(Buffer.from(message));
                             }
-                            callback(this.RESULT_SUCCESS, chunk);
-                        }
-                    });
+                            callback(this.RESULT_UNLIKELY_ERROR);
+                        });
+                })
+                .catch(error => {
+                    console.error(`Error checking jq installation: ${error}`);
+                    if (this._updateValueCallback) {
+                        const message = `Error in prerequisites check: ${error.message}`;
+                        this._updateValueCallback(Buffer.from(message));
+                    }
+                    callback(this.RESULT_UNLIKELY_ERROR);
                 });
-            });
         } catch (error) {
             console.error('Impossibile analizzare la richiesta:', error);
             if (this._updateValueCallback) {
