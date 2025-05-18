@@ -100,22 +100,9 @@ class handleConnection extends BlenoCharacteristic {
     onWriteRequest(data, offset, withoutResponse, callback) {
         try {
             // Enhanced command to ensure consistent network interface detection
-            // Add more explicit formatting of CONNECTION_TYPE to match exactly TYPE
-            // This ensures perfect consistency for client-side detection
-            const cmd = `sudo nmcli -t -f TYPE,STATE,CONNECTION device | grep connected | sudo jq -sR '
-                split("\\n") 
-                | map(select(length > 0)) 
-                | map(split(":")) 
-                | map(select(.[0] == "wifi" or .[0] == "ethernet")) 
-                | map(
-                    {
-                        "TYPE": .[0], 
-                        "STATE": "connected", 
-                        "CONNECTION": .[2],
-                        "CONNECTION_TYPE": .[0]  # Explicitly set to the same value as TYPE
-                    }
-                ) 
-            '`;
+            // Simpler, more reliable command structure for better client compatibility
+            // Uses a plain array of objects for maximum JSON compatibility
+            const cmd = `sudo nmcli -t -f TYPE,STATE,CONNECTION device | grep connected | awk -F: '{if($1=="wifi" || $1=="ethernet") print $1,$3}' | while read type conn; do echo "{\\"TYPE\\":\\"$type\\",\\"STATE\\":\\"connected\\",\\"CONNECTION\\":\\"$conn\\",\\"CONNECTION_TYPE\\":\\"$type\\"}"; done | jq -s '.'`;
             
             exec(cmd, (error, stdout, stderr) => {
                 if (error) {
@@ -125,6 +112,9 @@ class handleConnection extends BlenoCharacteristic {
                 }
                 
                 try {
+                    // Log raw output before parsing for debugging
+                    console.log("Raw connection output:", stdout.trim().substring(0, 200));
+                    
                     // Parse the jq output directly
                     const parsedData = JSON.parse(stdout.trim());
                     
@@ -143,8 +133,18 @@ class handleConnection extends BlenoCharacteristic {
                     const connectionTypes = parsedData.map(c => c.TYPE).join(', ');
                     console.log(`Connection check: ${parsedData.length} active connections: ${connectionTypes}`);
                     
-                    // Send the full response in one go
-                    callback(this.RESULT_SUCCESS, Buffer.from(stdout.trim()));
+                    // Make sure we're sending valid JSON by double-checking the format
+                    try {
+                        // Verify it's valid JSON before sending
+                        JSON.parse(stdout.trim());
+                        
+                        // Send the full response in one go
+                        callback(this.RESULT_SUCCESS, Buffer.from(stdout.trim()));
+                    } catch (jsonError) {
+                        console.error("Invalid JSON would be sent to client, fixing:", jsonError.message);
+                        // If JSON is invalid, send a safe empty array
+                        callback(this.RESULT_SUCCESS, Buffer.from('[]'));
+                    }
                 } catch (e) {
                     console.error('Error processing connection data:', e.message);
                     callback(this.RESULT_UNLIKELY_ERROR);
@@ -679,22 +679,9 @@ class getNetworkInfo extends BlenoCharacteristic {
             const requestData = JSON.parse(data.toString());
             
             // Enhanced command to ensure consistent network interface detection
-            // Add more explicit formatting of CONNECTION_TYPE to match exactly TYPE
-            // This ensures perfect consistency for client-side detection
-            const cmd = `sudo nmcli -t -f TYPE,STATE,CONNECTION device | grep connected | sudo jq -sR '
-                split("\\n") 
-                | map(select(length > 0)) 
-                | map(split(":")) 
-                | map(select(.[0] == "wifi" or .[0] == "ethernet")) 
-                | map(
-                    {
-                        "TYPE": .[0], 
-                        "STATE": "connected", 
-                        "CONNECTION": .[2],
-                        "CONNECTION_TYPE": .[0]  # Explicitly set to the same value as TYPE
-                    }
-                ) 
-            '`;
+            // Simpler, more reliable command structure for better client compatibility
+            // Uses a plain array of objects for maximum JSON compatibility
+            const cmd = `sudo nmcli -t -f TYPE,STATE,CONNECTION device | grep connected | awk -F: '{if($1=="wifi" || $1=="ethernet") print $1,$3}' | while read type conn; do echo "{\\"TYPE\\":\\"$type\\",\\"STATE\\":\\"connected\\",\\"CONNECTION\\":\\"$conn\\",\\"CONNECTION_TYPE\\":\\"$type\\"}"; done | jq -s '.'`;
             
             exec(cmd, (error, stdout, stderr) => {
                 if (error) {
@@ -722,8 +709,18 @@ class getNetworkInfo extends BlenoCharacteristic {
                     const connectionTypes = parsedData.map(c => c.TYPE).join(', ');
                     console.log(`Network status: ${parsedData.length} active connections: ${connectionTypes}`);
                     
-                    // Send the full response in one go
-                    callback(this.RESULT_SUCCESS, Buffer.from(stdout.trim()));
+                    // Make sure we're sending valid JSON by double-checking the format
+                    try {
+                        // Verify it's valid JSON before sending
+                        JSON.parse(stdout.trim());
+                        
+                        // Send the full response in one go
+                        callback(this.RESULT_SUCCESS, Buffer.from(stdout.trim()));
+                    } catch (jsonError) {
+                        console.error("Invalid JSON would be sent to client, fixing:", jsonError.message);
+                        // If JSON is invalid, send a safe empty array
+                        callback(this.RESULT_SUCCESS, Buffer.from('[]'));
+                    }
                 } catch (e) {
                     console.error('Error processing network info:', e.message);
                     callback(this.RESULT_UNLIKELY_ERROR);
