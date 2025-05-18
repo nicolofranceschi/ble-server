@@ -283,15 +283,15 @@ class listSSID extends BlenoCharacteristic {
                             return;
                         }
                         
-                        console.log('Raw scan output lines:', nmcliOut.split('\n').length);
+                        // Scanning WiFi networks
+                        console.log('Scanning WiFi networks...');
                         
-                        // Eseguiamo il parsing delle reti Wi-Fi
-                        const cmd = `sudo nmcli -f ssid,mode,chan,rate,signal,bars,security -t dev wifi | sudo jq -sR 'split("\\n") | map(select(length > 0)) | map(split(":")) | map(select(length >= 7)) | map({"network": .[0],"mode": .[1],"channel": .[2],"rate": .[3], "signal": .[4], "bars": .[5], "security": .[6]})'`;
+                        // Reduced command to only get essential WiFi network data
+                        const cmd = `sudo nmcli -f ssid,signal,security -t dev wifi | sudo jq -sR 'split("\\n") | map(select(length > 0)) | map(split(":")) | map(select(length >= 3)) | map({"network": .[0],"signal": .[1], "security": .[2]})'`;
                         
                         exec(cmd, (error, stdout, stderr) => {
                             if (error) {
                                 console.error(`Error executing command: ${error}`);
-                                console.error(`stderr: ${stderr}`);
                                 if (this._updateValueCallback) {
                                     const message = `Error scanning WiFi networks: ${stderr}`;
                                     this._updateValueCallback(Buffer.from(message));
@@ -303,8 +303,7 @@ class listSSID extends BlenoCharacteristic {
                             try {
                                 // Verifica che l'output sia valido
                                 if (!stdout || stdout.trim() === '') {
-                                    console.warn('WARNING: jq returned empty output');
-                                    // Invia un segnale di fine lista anche se la risposta è vuota
+                                    console.log('No WiFi networks found');
                                     const endBuffer = Buffer.from("end");
                                     if (this._updateValueCallback) {
                                         this._updateValueCallback(endBuffer);
@@ -315,11 +314,9 @@ class listSSID extends BlenoCharacteristic {
                                 
                                 // Parsing dell'array completo
                                 const networks = JSON.parse(stdout);
-                                console.log(`Found ${networks.length} total networks`);
                                 
                                 // Filtriamo le reti valide (con nome non vuoto)
                                 const validNetworks = networks.filter(n => n && n.network && n.network.trim() !== '');
-                                console.log(`Found ${validNetworks.length} valid networks after filtering`);
                                 
                                 // Ordiniamo per potenza del segnale
                                 validNetworks.sort((a, b) => {
@@ -328,14 +325,15 @@ class listSSID extends BlenoCharacteristic {
                                     return signalB - signalA; // Ordine decrescente
                                 });
                                 
+                                // Log once with count instead of detailed info
+                                console.log(`WiFi scan: ${validNetworks.length} networks, sending index ${networkIndex}`);
+                                
                                 // Accesso al network specifico
                                 if (networkIndex < validNetworks.length) {
                                     const network = validNetworks[networkIndex];
-                                    console.log(`Sending network at index ${networkIndex}:`, network);
                                     
                                     // Verifichiamo che il network abbia un nome valido
                                     if (!network.network || network.network.trim() === '') {
-                                        console.warn(`Network at index ${networkIndex} has empty name, skipping`);
                                         const skipBuffer = Buffer.from(JSON.stringify({skip: true}));
                                         if (this._updateValueCallback) {
                                             this._updateValueCallback(skipBuffer);
@@ -355,8 +353,6 @@ class listSSID extends BlenoCharacteristic {
                                     callback(this.RESULT_SUCCESS, responseBuffer);
                                 } else {
                                     // Nessun'altra rete disponibile
-                                    console.log(`No network at index ${networkIndex}, sending end signal`);
-                                    
                                     const endBuffer = Buffer.from("end");
                                     
                                     if (this._updateValueCallback) {
@@ -367,7 +363,6 @@ class listSSID extends BlenoCharacteristic {
                                 }
                             } catch (parseError) {
                                 console.error('Error parsing WiFi networks:', parseError);
-                                console.error('Raw stdout:', stdout);
                                 if (this._updateValueCallback) {
                                     const message = 'Error parsing WiFi networks list';
                                     this._updateValueCallback(Buffer.from(message));
@@ -503,38 +498,32 @@ class getIp extends BlenoCharacteristic {
 
             const offset = parseInt(offsetString);
 
-            const cmd = `sudo hostname -I | tr ' ' '\n' | grep -E '^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01]))' | head -n 1`;
+            // Simplified IP command
+            const cmd = `hostname -I | awk '{print $1}'`;
 
             exec(cmd, (error, stdout, stderr) => {
-
-                const stringBase64 = Buffer.from(stdout)
-                const mtuSize = 20; // Assuming a typical MTU size minus some bytes for headers
-                const end = Math.min(offset + mtuSize, stringBase64.length);
-
-                const chunk = stringBase64.slice(offset, end);
-                console.log(stringBase64)
-                console.log(chunk)
-                console.log(offset)
-                console.log(end)
-                
                 if (error) {
-                    console.error(`Errore nella connessione al Wi-Fi: ${error}`);
+                    console.error(`Error getting IP: ${error}`);
                     if (this._updateValueCallback) {
-                        const message = 'Errore nella connessione al Wi-Fi' + stderr;
-                        console.log('Sending error notification to client ->:', message);
+                        const message = 'Error getting IP address';
                         this._updateValueCallback(Buffer.from(message));
                     }
                     callback(this.RESULT_UNLIKELY_ERROR);
                     return;
                 }
 
+                // Get just the IP
+                const ipAddress = stdout.trim();
+                console.log(`IP Address: ${ipAddress}`);
+                
+                // Send response directly without chunking since IPs are small
+                const responseBuffer = Buffer.from(ipAddress);
+                
                 if (this._updateValueCallback) {
-                    const message = 'Connesso con successo alla rete Wi-Fi' + stdout;
-                    console.log('Sending success notification to client ->:', chunk);
-                    this._updateValueCallback(chunk);
+                    this._updateValueCallback(responseBuffer);
                 }
 
-                callback(this.RESULT_SUCCESS, chunk);
+                callback(this.RESULT_SUCCESS, responseBuffer);
             });
         } catch (error) {
             console.error('Impossibile analizzare le credenziali Wi-Fi:', error);
@@ -753,49 +742,77 @@ class getNetworkInfo extends BlenoCharacteristic {
                         return;
                     }
 
-                    console.log('Raw nmcli device info output:', nmcliOut);
+                    // Reduced logging
+                    console.log('Getting network info...');
                     
-                    // Command to get detailed network information
-                    const cmd = `sudo nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device | sudo jq -sR 'split("\\n") | map(split(":")) | map({"DEVICE": .[0], "TYPE": .[1], "STATE": .[2], "CONNECTION": .[3], "CONNECTION_TYPE": (if .[1] == "ethernet" and .[2] == "connected" then "ethernet" elif .[1] == "wifi" and .[2] == "connected" then "wifi" else null end)})'`;
-                    console.log('Executing full command with jq:', cmd);
+                    // Simplified command to get ONLY the connected devices with minimal data
+                    const cmd = `sudo nmcli -t -f TYPE,STATE,CONNECTION device | grep connected | sudo jq -sR 'split("\\n") | map(select(length > 0)) | map(split(":")) | map({TYPE: .[0], STATE: .[1], CONNECTION: .[2]}) | map(select(.TYPE == "wifi" or .TYPE == "ethernet"))'`;
                     
                     exec(cmd, (error, stdout, stderr) => {
-                        console.log('Command completed with status:', error ? 'ERROR' : 'SUCCESS');
-                        
                         if (error) {
                             console.error(`Error executing command: ${error}`);
-                            console.error(`stderr: ${stderr}`);
                             if (this._updateValueCallback) {
                                 const message = `Error retrieving network info: ${stderr}`;
-                                console.log('Sending error notification to client ->:', message);
                                 this._updateValueCallback(Buffer.from(message));
                             }
                             callback(this.RESULT_UNLIKELY_ERROR);
                             return;
                         }
 
-                        console.log('Raw jq output:', stdout);
-                        
-                        if (!stdout || stdout.trim() === '') {
-                            console.error('WARNING: jq command returned empty output');
+                        // Process data to make it even smaller
+                        try {
+                            const devices = JSON.parse(stdout);
+                            
+                            // Create a much smaller response with just what we need
+                            const minimizedResponse = [];
+                            
+                            // Add only wifi and ethernet connections that are actually connected
+                            devices.forEach(device => {
+                                if (device.TYPE && (device.TYPE === "wifi" || device.TYPE === "ethernet") && 
+                                    device.STATE && device.STATE.includes("connected")) {
+                                    
+                                    // Add connection type for client detection
+                                    minimizedResponse.push({
+                                        TYPE: device.TYPE,
+                                        STATE: "connected",
+                                        CONNECTION: device.CONNECTION || device.TYPE,
+                                        CONNECTION_TYPE: device.TYPE  // Explicitly set the connection type
+                                    });
+                                }
+                            });
+                            
+                            // Convert to string and send in one chunk if possible
+                            const responseJson = JSON.stringify(minimizedResponse);
+                            const responseBuffer = Buffer.from(responseJson);
+                            
+                            // Send entire response if possible, otherwise chunk it
+                            if (responseBuffer.length <= 20 || offset >= responseBuffer.length) {
+                                if (this._updateValueCallback) {
+                                    this._updateValueCallback(responseBuffer);
+                                }
+                                callback(this.RESULT_SUCCESS, responseBuffer);
+                            } else {
+                                const mtuSize = 20;
+                                const end = Math.min(offset + mtuSize, responseBuffer.length);
+                                const chunk = responseBuffer.slice(offset, end);
+                                
+                                if (this._updateValueCallback) {
+                                    this._updateValueCallback(chunk);
+                                }
+                                callback(this.RESULT_SUCCESS, chunk);
+                            }
+                        } catch (e) {
+                            // Fallback to original method if JSON parsing fails
+                            const stringBase64 = Buffer.from(stdout);
+                            const mtuSize = 20;
+                            const end = Math.min(offset + mtuSize, stringBase64.length);
+                            const chunk = stringBase64.slice(offset, end);
+                            
+                            if (this._updateValueCallback) {
+                                this._updateValueCallback(chunk);
+                            }
+                            callback(this.RESULT_SUCCESS, chunk);
                         }
-                        
-                        const stringBase64 = Buffer.from(stdout);
-                        const mtuSize = 20; // Assuming a typical MTU size minus some bytes for headers
-                        const end = Math.min(offset + mtuSize, stringBase64.length);
-
-                        const chunk = stringBase64.slice(offset, end);
-                        console.log('Full data buffer length:', stringBase64.length);
-                        console.log('Sending chunk:', chunk.toString());
-                        console.log('Offset:', offset);
-                        console.log('End:', end);
-                        
-                        if (this._updateValueCallback) {
-                            console.log('Sending network info to client ->:', chunk);
-                            this._updateValueCallback(chunk);
-                        }
-
-                        callback(this.RESULT_SUCCESS, chunk);
                     });
                 });
             });
