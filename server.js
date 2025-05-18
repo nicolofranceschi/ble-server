@@ -27,8 +27,6 @@ class connectWifi extends BlenoCharacteristic {
     }
 
     onWriteRequest(data, offset, withoutResponse, callback) {
-        console.log('Ricevute credenziali Wi-Fi:', data.toString());
-
         try {
             const wifiCredentials = JSON.parse(data.toString());
             const ssid = wifiCredentials.username;
@@ -41,18 +39,14 @@ class connectWifi extends BlenoCharacteristic {
                         console.error(`Errore nella connessione al Wi-Fi: ${result.error}`);
                         if (this._updateValueCallback) {
                             const message = 'Errore nella connessione al Wi-Fi' + result.stderr;
-                            console.log('Sending error notification to client ->:', message);
                             this._updateValueCallback(Buffer.from(message));
                         }
                         callback(this.RESULT_UNLIKELY_ERROR);
                         return;
                     }
 
-                    console.log(`Connesso alla rete Wi-Fi: ${ssid}`);
-
                     if (this._updateValueCallback) {
                         const message = 'Connesso con successo alla rete Wi-Fi' + result.stdout;
-                        console.log('Sending success notification to client ->:', message);
                         this._updateValueCallback(Buffer.from(message));
                     }
                     callback("Connesso con successo alla rete Wi-Fi - from response");
@@ -61,7 +55,6 @@ class connectWifi extends BlenoCharacteristic {
                     console.error(`Errore nella connessione al Wi-Fi: ${error}`);
                     if (this._updateValueCallback) {
                         const message = 'Errore nella connessione al Wi-Fi: ' + error.message;
-                        console.log('Sending error notification to client ->:', message);
                         this._updateValueCallback(Buffer.from(message));
                     }
                     callback(this.RESULT_UNLIKELY_ERROR);
@@ -70,7 +63,6 @@ class connectWifi extends BlenoCharacteristic {
             console.error('Impossibile analizzare le credenziali Wi-Fi:', error);
             if (this._updateValueCallback) {
                 const message = 'Errore nel parsing delle credenziali';
-                console.log('Sending error notification to client ->:', message);
                 this._updateValueCallback(Buffer.from(message));
             }
             callback(this.RESULT_UNLIKELY_ERROR);
@@ -102,8 +94,6 @@ class handleConnection extends BlenoCharacteristic {
     }
 
     onWriteRequest(data, offset, withoutResponse, callback) {
-        console.log('Sono connesso ?', data.toString());
-
         try {
             // First check if jq is installed
             utils.checkJqInstalled()
@@ -133,14 +123,8 @@ class handleConnection extends BlenoCharacteristic {
 
                             // Get appropriate chunk
                             const chunk = utils.getChunk(this._cachedData, offset);
-                            
-                            console.log('Full data buffer length:', this._cachedData.length);
-                            console.log('Sending chunk:', chunk.toString());
-                            console.log('Offset:', offset);
-                            console.log('End:', offset + chunk.length);
-                            
+                             
                             if (this._updateValueCallback) {
-                                console.log('Sending success notification to client ->:', chunk);
                                 this._updateValueCallback(chunk);
                             }
 
@@ -150,7 +134,6 @@ class handleConnection extends BlenoCharacteristic {
                             console.error(`Error getting network info: ${error}`);
                             if (this._updateValueCallback) {
                                 const message = `Error checking network devices: ${error.message}`;
-                                console.log('Sending error notification to client ->:', message);
                                 this._updateValueCallback(Buffer.from(message));
                             }
                             callback(this.RESULT_UNLIKELY_ERROR);
@@ -168,7 +151,6 @@ class handleConnection extends BlenoCharacteristic {
             console.error('Impossibile analizzare la richiesta:', error);
             if (this._updateValueCallback) {
                 const message = 'Errore nel parsing della richiesta';
-                console.log('Sending error notification to client ->:', message);
                 this._updateValueCallback(Buffer.from(message));
             }
             callback(this.RESULT_UNLIKELY_ERROR);
@@ -201,8 +183,6 @@ class listSSID extends BlenoCharacteristic {
     }
 
     onWriteRequest(data, offset, withoutResponse, callback) {
-        console.log('Richiesta liste delle reti Wi-Fi', data.toString());
-
         try {
             // First check if jq is installed
             utils.checkJqInstalled()
@@ -224,7 +204,6 @@ class listSSID extends BlenoCharacteristic {
                         
                         try {
                             networkIndex = parseInt(requestData.index);
-                            console.log(`Requested network at index: ${networkIndex}`);
                             
                             if (isNaN(networkIndex)) {
                                 throw new Error("Invalid network index");
@@ -255,8 +234,6 @@ class listSSID extends BlenoCharacteristic {
                                 if (shouldRefresh && timeSinceLastScan > 10000) {
                                     this._lastScanTime = now;
                                 }
-                                
-                                console.log(`WiFi scan: ${networks.length} networks, sending index ${networkIndex}`);
                                 
                                 // Check if the requested network exists
                                 if (networkIndex < networks.length) {
@@ -328,13 +305,7 @@ class listSSID extends BlenoCharacteristic {
                                 // Get the appropriate chunk
                                 const chunk = utils.getChunk(responseBuffer, offset);
                                 
-                                console.log('Full data buffer length:', responseBuffer.length);
-                                console.log('Sending chunk:', chunk.toString());
-                                console.log('Offset:', offset);
-                                console.log('End:', offset + chunk.length);
-                                
                                 if (this._updateValueCallback) {
-                                    console.log('Sending success notification to client ->:', chunk);
                                     this._updateValueCallback(chunk);
                                 }
 
@@ -344,7 +315,6 @@ class listSSID extends BlenoCharacteristic {
                                 console.error(`Error getting WiFi networks: ${error}`);
                                 if (this._updateValueCallback) {
                                     const message = `Error scanning WiFi networks: ${error.message}`;
-                                    console.log('Sending error notification to client ->:', message);
                                     this._updateValueCallback(Buffer.from(message));
                                 }
                                 callback(this.RESULT_UNLIKELY_ERROR);
@@ -363,7 +333,6 @@ class listSSID extends BlenoCharacteristic {
             console.error('Impossibile analizzare la richiesta:', error);
             if (this._updateValueCallback) {
                 const message = 'Errore nel parsing della richiesta';
-                console.log('Sending error notification to client ->:', message);
                 this._updateValueCallback(Buffer.from(message));
             }
             callback(this.RESULT_UNLIKELY_ERROR);
@@ -395,14 +364,10 @@ class getIp extends BlenoCharacteristic {
     }
 
     onWriteRequest(data, offset, withoutResponse, callback) {
-        console.log('Richiesta indirizzo IP', data.toString());
-
         try {
             // Use the utility function to get IP address
             utils.getIpAddress()
                 .then(ipAddress => {
-                    console.log(`IP Address: ${ipAddress}`);
-                    
                     // Cache the IP
                     this._cachedIp = ipAddress;
                     
@@ -427,7 +392,6 @@ class getIp extends BlenoCharacteristic {
             console.error('Impossibile analizzare la richiesta IP:', error);
             if (this._updateValueCallback) {
                 const message = 'Errore nel parsing della richiesta';
-                console.log('Sending error notification to client ->:', message);
                 this._updateValueCallback(Buffer.from(message));
             }
             callback(this.RESULT_UNLIKELY_ERROR);
@@ -458,8 +422,6 @@ class changeWifi extends BlenoCharacteristic {
     }
 
     onWriteRequest(data, offset, withoutResponse, callback) {
-        console.log('Changing Wi-Fi network:', data.toString());
-
         try {
             const changeRequest = JSON.parse(data.toString());
             
@@ -476,19 +438,14 @@ class changeWifi extends BlenoCharacteristic {
                             console.error(`STDERR: ${result.stderr}`);
                             if (this._updateValueCallback) {
                                 const message = 'Errore nel cambio rete Wi-Fi: ' + result.stderr;
-                                console.log('Sending error notification to client ->:', message);
                                 this._updateValueCallback(Buffer.from(message));
                             }
                             callback(this.RESULT_UNLIKELY_ERROR);
                             return;
                         }
-
-                        console.log(`Connesso alla nuova rete Wi-Fi: ${ssid}`);
-                        console.log(`STDOUT: ${result.stdout}`);
                         
                         if (this._updateValueCallback) {
                             const message = 'Connesso con successo alla nuova rete Wi-Fi: ' + result.stdout;
-                            console.log('Sending success notification to client ->:', message);
                             this._updateValueCallback(Buffer.from(message));
                         }
                         callback(this.RESULT_SUCCESS);
@@ -503,7 +460,6 @@ class changeWifi extends BlenoCharacteristic {
                     });
             } else if (changeRequest.action === 'disconnect') {
                 // User wants to disconnect from current WiFi
-                console.log('Executing Wi-Fi disconnect command');
                 
                 // Use the utility function to disconnect from WiFi
                 utils.disconnectWifi()
@@ -518,12 +474,9 @@ class changeWifi extends BlenoCharacteristic {
                             callback(this.RESULT_UNLIKELY_ERROR);
                             return;
                         }
-
-                        console.log('Disconnesso dalla rete Wi-Fi con successo');
                         
                         if (this._updateValueCallback) {
                             const message = 'Disconnesso con successo dalla rete Wi-Fi';
-                            console.log('Sending success notification to client ->:', message);
                             this._updateValueCallback(Buffer.from(message));
                         }
                         callback(this.RESULT_SUCCESS);
@@ -540,7 +493,6 @@ class changeWifi extends BlenoCharacteristic {
                 console.error('Azione non supportata');
                 if (this._updateValueCallback) {
                     const message = 'Azione non supportata';
-                    console.log('Sending error notification to client ->:', message);
                     this._updateValueCallback(Buffer.from(message));
                 }
                 callback(this.RESULT_UNLIKELY_ERROR);
@@ -549,7 +501,6 @@ class changeWifi extends BlenoCharacteristic {
             console.error('Impossibile analizzare la richiesta:', error);
             if (this._updateValueCallback) {
                 const message = 'Errore nel parsing della richiesta';
-                console.log('Sending error notification to client ->:', message);
                 this._updateValueCallback(Buffer.from(message));
             }
             callback(this.RESULT_UNLIKELY_ERROR);
@@ -581,8 +532,6 @@ class getNetworkInfo extends BlenoCharacteristic {
     }
 
     onWriteRequest(data, offset, withoutResponse, callback) {
-        console.log('Requested network information', data.toString());
-
         try {
             // First check if jq is installed
             utils.checkJqInstalled()
@@ -628,11 +577,6 @@ class getNetworkInfo extends BlenoCharacteristic {
                                 // Get appropriate chunk
                                 const chunk = utils.getChunk(this._cachedData, offset);
                                 
-                                console.log('Full data buffer length:', this._cachedData.length);
-                                console.log('Sending chunk:', chunk.toString());
-                                console.log('Offset:', offset);
-                                console.log('End:', offset + chunk.length);
-                                
                                 if (this._updateValueCallback) {
                                     this._updateValueCallback(chunk);
                                 }
@@ -660,7 +604,6 @@ class getNetworkInfo extends BlenoCharacteristic {
             console.error('Impossibile analizzare la richiesta:', error);
             if (this._updateValueCallback) {
                 const message = 'Errore nel parsing della richiesta';
-                console.log('Sending error notification to client ->:', message);
                 this._updateValueCallback(Buffer.from(message));
             }
             callback(this.RESULT_UNLIKELY_ERROR);
