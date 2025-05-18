@@ -99,9 +99,20 @@ class handleConnection extends BlenoCharacteristic {
 
     onWriteRequest(data, offset, withoutResponse, callback) {
         try {
-            // Super simplified command to get ONLY wifi and ethernet connection status
-            // This class is kept for backwards compatibility, but redirects to the same simplified logic
-            const cmd = `sudo nmcli -t -f TYPE,STATE,CONNECTION device | grep -E "^(wifi|ethernet).*connected" | awk -F: '{print "{\"TYPE\":\"" $1 "\",\"STATE\":\"connected\",\"CONNECTION\":\"" $3 "\",\"CONNECTION_TYPE\":\"" $1 "\"}"}'`;
+            // Enhanced command to ensure consistent network interface detection
+            // This explicitly adds CONNECTION_TYPE property identical to TYPE for proper client-side detection
+            const cmd = `sudo nmcli -t -f TYPE,STATE,CONNECTION device | grep connected | sudo jq -sR '
+                split("\\n") 
+                | map(select(length > 0)) 
+                | map(split(":")) 
+                | map(select(.[0] == "wifi" or .[0] == "ethernet")) 
+                | map({
+                    "TYPE": .[0], 
+                    "STATE": "connected", 
+                    "CONNECTION": .[2], 
+                    "CONNECTION_TYPE": .[0]
+                }) 
+            '`;
             
             exec(cmd, (error, stdout, stderr) => {
                 if (error) {
@@ -111,10 +122,10 @@ class handleConnection extends BlenoCharacteristic {
                 }
                 
                 try {
-                    // Construct a valid JSON array from the output
-                    const lines = stdout.split('\n').filter(line => line.trim() !== '');
+                    // Parse the jq output directly
+                    const parsedData = JSON.parse(stdout.trim());
                     
-                    if (lines.length === 0) {
+                    if (!Array.isArray(parsedData) || parsedData.length === 0) {
                         // No connections
                         console.log('Connection check: No active connections');
                         const emptyResponse = JSON.stringify([]);
@@ -122,14 +133,12 @@ class handleConnection extends BlenoCharacteristic {
                         return;
                     }
                     
-                    // Create the response as a valid JSON array
-                    const jsonResponse = '[' + lines.join(',') + ']';
-                    
-                    // Log just once what we're sending
-                    console.log(`Connection check: ${lines.length} active connections: ${lines.map(l => JSON.parse(l).TYPE).join(', ')}`);
+                    // Log what connections were found
+                    const connectionTypes = parsedData.map(c => c.TYPE).join(', ');
+                    console.log(`Connection check: ${parsedData.length} active connections: ${connectionTypes}`);
                     
                     // Send the full response in one go
-                    callback(this.RESULT_SUCCESS, Buffer.from(jsonResponse));
+                    callback(this.RESULT_SUCCESS, Buffer.from(stdout.trim()));
                 } catch (e) {
                     console.error('Error processing connection data:', e.message);
                     callback(this.RESULT_UNLIKELY_ERROR);
@@ -554,50 +563,27 @@ class changeWifi extends BlenoCharacteristic {
                 // User wants to disconnect from current WiFi
                 console.log('Executing Wi-Fi disconnect command');
                 
-                // Direct approach to disconnect all wireless connections
-                exec('sudo nmcli radio wifi off && sleep 1 && sudo nmcli radio wifi on', (error, stdout, stderr) => {
-                    if (error) {
-                        console.error(`Errore nella disconnessione Wi-Fi: ${error}`);
-                        console.error(`STDERR: ${stderr}`);
-                        
-                        // Try fallback method if the radio command fails
-                        exec('sudo nmcli -t -f DEVICE,TYPE,STATE device | grep wifi | grep connected', (checkErr, checkOut, checkStderr) => {
-                            if (checkErr || !checkOut || checkOut.trim() === '') {
-                                console.log('No connected wifi devices found or error checking');
-                                if (this._updateValueCallback) {
-                                    const message = 'Nessun dispositivo Wi-Fi connesso trovato o errore: ' + (checkStderr || stderr);
-                                    this._updateValueCallback(Buffer.from(message));
-                                }
-                                callback(this.RESULT_UNLIKELY_ERROR);
-                                return;
-                            }
+                // Improved approach for more reliable WiFi disconnection
+                // First try to identify connected WiFi devices and disconnect them directly
+                exec('sudo nmcli -t -f DEVICE,TYPE,STATE device | grep wifi | grep connected', (checkErr, checkOut, checkStderr) => {
+                    if (!checkErr && checkOut && checkOut.trim() !== '') {
+                        // Parse device names from output
+                        const devices = checkOut.split('\n').filter(line => line.trim() !== '');
+                        if (devices.length > 0) {
+                            // Extract device name(s) and disconnect each one
+                            const deviceNames = devices.map(dev => dev.split(':')[0]);
+                            console.log(`Found connected wifi devices: ${deviceNames.join(', ')}`);
                             
-                            // Parse the device name from the output
-                            const devices = checkOut.split('\n').filter(line => line.trim() !== '');
-                            if (devices.length === 0) {
-                                console.log('No connected wifi devices found');
-                                if (this._updateValueCallback) {
-                                    const message = 'Nessun dispositivo Wi-Fi connesso trovato';
-                                    this._updateValueCallback(Buffer.from(message));
-                                }
-                                callback(this.RESULT_SUCCESS);
-                                return;
-                            }
+                            // Create a chain of disconnect commands for all WiFi devices
+                            const disconnectCmds = deviceNames.map(name => `sudo nmcli device disconnect ${name}`).join(' && ');
                             
-                            // Extract device name and try to disconnect
-                            const deviceName = devices[0].split(':')[0];
-                            console.log(`Found connected wifi device: ${deviceName}, trying disconnect`);
-                            
-                            exec(`sudo nmcli device disconnect ${deviceName}`, (discErr, discOut, discStderr) => {
+                            exec(disconnectCmds, (discErr, discOut, discStderr) => {
                                 if (discErr) {
-                                    console.error(`Error disconnecting device ${deviceName}: ${discErr}`);
-                                    if (this._updateValueCallback) {
-                                        const message = `Errore disconnettendo ${deviceName}: ${discStderr}`;
-                                        this._updateValueCallback(Buffer.from(message));
-                                    }
-                                    callback(this.RESULT_UNLIKELY_ERROR);
+                                    console.error(`Error disconnecting devices: ${discErr}`);
+                                    // Try fallback method (radio off/on)
+                                    fallbackDisconnect.call(this, callback);
                                 } else {
-                                    console.log(`Disconnected ${deviceName} successfully`);
+                                    console.log(`Disconnected WiFi devices successfully`);
                                     if (this._updateValueCallback) {
                                         const message = 'Disconnesso con successo dalla rete Wi-Fi';
                                         this._updateValueCallback(Buffer.from(message));
@@ -605,9 +591,28 @@ class changeWifi extends BlenoCharacteristic {
                                     callback(this.RESULT_SUCCESS);
                                 }
                             });
-                        });
-                        return;
+                            return;
+                        }
                     }
+                    
+                    // If no WiFi devices found or error checking, try fallback method
+                    fallbackDisconnect.call(this, callback);
+                });
+                
+                // Fallback function for WiFi disconnection
+                function fallbackDisconnect(callback) {
+                    console.log('Using fallback disconnect method (radio off/on)');
+                    exec('sudo nmcli radio wifi off && sleep 1 && sudo nmcli radio wifi on', (error, stdout, stderr) => {
+                        if (error) {
+                            console.error(`Error in fallback WiFi disconnect: ${error}`);
+                            console.error(`STDERR: ${stderr}`);
+                            if (this._updateValueCallback) {
+                                const message = 'Errore nella disconnessione Wi-Fi: ' + stderr;
+                                this._updateValueCallback(Buffer.from(message));
+                            }
+                            callback(this.RESULT_UNLIKELY_ERROR);
+                            return;
+                        }
 
                     console.log('Disconnesso dalla rete Wi-Fi con successo (radio method)');
                     
@@ -618,6 +623,7 @@ class changeWifi extends BlenoCharacteristic {
                     }
                     callback(this.RESULT_SUCCESS);
                 });
+                }
             } else {
                 console.error('Azione non supportata');
                 if (this._updateValueCallback) {
@@ -666,9 +672,20 @@ class getNetworkInfo extends BlenoCharacteristic {
             // Parse the input data just once
             const requestData = JSON.parse(data.toString());
             
-            // Super simplified command to get ONLY wifi and ethernet connection status
-            // Without checking jq separately and without extra logging
-            const cmd = `sudo nmcli -t -f TYPE,STATE,CONNECTION device | grep -E "^(wifi|ethernet).*connected" | awk -F: '{print "{\"TYPE\":\"" $1 "\",\"STATE\":\"connected\",\"CONNECTION\":\"" $3 "\",\"CONNECTION_TYPE\":\"" $1 "\"}"}'`;
+            // Enhanced command to ensure consistent network interface detection
+            // This explicitly adds CONNECTION_TYPE property identical to TYPE for proper client-side detection
+            const cmd = `sudo nmcli -t -f TYPE,STATE,CONNECTION device | grep connected | sudo jq -sR '
+                split("\\n") 
+                | map(select(length > 0)) 
+                | map(split(":")) 
+                | map(select(.[0] == "wifi" or .[0] == "ethernet")) 
+                | map({
+                    "TYPE": .[0], 
+                    "STATE": "connected", 
+                    "CONNECTION": .[2], 
+                    "CONNECTION_TYPE": .[0]
+                }) 
+            '`;
             
             exec(cmd, (error, stdout, stderr) => {
                 if (error) {
@@ -678,10 +695,10 @@ class getNetworkInfo extends BlenoCharacteristic {
                 }
                 
                 try {
-                    // Construct a valid JSON array from the output
-                    const lines = stdout.split('\n').filter(line => line.trim() !== '');
+                    // Parse the jq output directly
+                    const parsedData = JSON.parse(stdout.trim());
                     
-                    if (lines.length === 0) {
+                    if (!Array.isArray(parsedData) || parsedData.length === 0) {
                         // No connections
                         console.log('Network status: No active connections');
                         const emptyResponse = JSON.stringify([]);
@@ -689,14 +706,12 @@ class getNetworkInfo extends BlenoCharacteristic {
                         return;
                     }
                     
-                    // Create the response as a valid JSON array
-                    const jsonResponse = '[' + lines.join(',') + ']';
-                    
-                    // Log just once what we're sending
-                    console.log(`Network status: ${lines.length} active connections: ${lines.map(l => JSON.parse(l).TYPE).join(', ')}`);
+                    // Log what connections were found
+                    const connectionTypes = parsedData.map(c => c.TYPE).join(', ');
+                    console.log(`Network status: ${parsedData.length} active connections: ${connectionTypes}`);
                     
                     // Send the full response in one go
-                    callback(this.RESULT_SUCCESS, Buffer.from(jsonResponse));
+                    callback(this.RESULT_SUCCESS, Buffer.from(stdout.trim()));
                 } catch (e) {
                     console.error('Error processing network info:', e.message);
                     callback(this.RESULT_UNLIKELY_ERROR);
