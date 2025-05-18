@@ -270,6 +270,22 @@ class listSSID extends BlenoCharacteristic {
                         
                         if (!stdout || stdout.trim() === '') {
                             console.error('WARNING: jq command returned empty output');
+                            if (this._updateValueCallback) {
+                                const message = 'No WiFi networks found';
+                                console.log('Sending notification to client ->:', message);
+                                this._updateValueCallback(Buffer.from(message));
+                            }
+                            callback(this.RESULT_UNLIKELY_ERROR);
+                            return;
+                        }
+                        
+                        // Try to parse the JSON to validate it before sending
+                        try {
+                            const testParse = JSON.parse(stdout);
+                            console.log(`Successfully parsed output with ${testParse.length} networks`);
+                        } catch (parseError) {
+                            console.error('Error parsing WiFi network data:', parseError);
+                            // Continue anyway - the client will handle parsing issues
                         }
                         
                         const stringBase64 = Buffer.from(stdout);
