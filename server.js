@@ -100,18 +100,21 @@ class handleConnection extends BlenoCharacteristic {
     onWriteRequest(data, offset, withoutResponse, callback) {
         try {
             // Enhanced command to ensure consistent network interface detection
-            // This explicitly adds CONNECTION_TYPE property identical to TYPE for proper client-side detection
+            // Add more explicit formatting of CONNECTION_TYPE to match exactly TYPE
+            // This ensures perfect consistency for client-side detection
             const cmd = `sudo nmcli -t -f TYPE,STATE,CONNECTION device | grep connected | sudo jq -sR '
                 split("\\n") 
                 | map(select(length > 0)) 
                 | map(split(":")) 
                 | map(select(.[0] == "wifi" or .[0] == "ethernet")) 
-                | map({
-                    "TYPE": .[0], 
-                    "STATE": "connected", 
-                    "CONNECTION": .[2], 
-                    "CONNECTION_TYPE": .[0]
-                }) 
+                | map(
+                    {
+                        "TYPE": .[0], 
+                        "STATE": "connected", 
+                        "CONNECTION": .[2],
+                        "CONNECTION_TYPE": .[0]  # Explicitly set to the same value as TYPE
+                    }
+                ) 
             '`;
             
             exec(cmd, (error, stdout, stderr) => {
@@ -133,7 +136,10 @@ class handleConnection extends BlenoCharacteristic {
                         return;
                     }
                     
-                    // Log what connections were found
+                    // Log what connections were found with more detail
+                    parsedData.forEach((conn, idx) => {
+                        console.log(`Connection ${idx}: TYPE=${conn.TYPE}, CONNECTION_TYPE=${conn.CONNECTION_TYPE}, NAME=${conn.CONNECTION}`);
+                    });
                     const connectionTypes = parsedData.map(c => c.TYPE).join(', ');
                     console.log(`Connection check: ${parsedData.length} active connections: ${connectionTypes}`);
                     
@@ -673,18 +679,21 @@ class getNetworkInfo extends BlenoCharacteristic {
             const requestData = JSON.parse(data.toString());
             
             // Enhanced command to ensure consistent network interface detection
-            // This explicitly adds CONNECTION_TYPE property identical to TYPE for proper client-side detection
+            // Add more explicit formatting of CONNECTION_TYPE to match exactly TYPE
+            // This ensures perfect consistency for client-side detection
             const cmd = `sudo nmcli -t -f TYPE,STATE,CONNECTION device | grep connected | sudo jq -sR '
                 split("\\n") 
                 | map(select(length > 0)) 
                 | map(split(":")) 
                 | map(select(.[0] == "wifi" or .[0] == "ethernet")) 
-                | map({
-                    "TYPE": .[0], 
-                    "STATE": "connected", 
-                    "CONNECTION": .[2], 
-                    "CONNECTION_TYPE": .[0]
-                }) 
+                | map(
+                    {
+                        "TYPE": .[0], 
+                        "STATE": "connected", 
+                        "CONNECTION": .[2],
+                        "CONNECTION_TYPE": .[0]  # Explicitly set to the same value as TYPE
+                    }
+                ) 
             '`;
             
             exec(cmd, (error, stdout, stderr) => {
@@ -706,7 +715,10 @@ class getNetworkInfo extends BlenoCharacteristic {
                         return;
                     }
                     
-                    // Log what connections were found
+                    // Log what connections were found with more detail
+                    parsedData.forEach((conn, idx) => {
+                        console.log(`Network ${idx}: TYPE=${conn.TYPE}, CONNECTION_TYPE=${conn.CONNECTION_TYPE}, NAME=${conn.CONNECTION}`);
+                    });
                     const connectionTypes = parsedData.map(c => c.TYPE).join(', ');
                     console.log(`Network status: ${parsedData.length} active connections: ${connectionTypes}`);
                     
