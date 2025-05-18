@@ -612,60 +612,69 @@ class changeWifi extends BlenoCharacteristic {
                 // User wants to disconnect from current WiFi
                 console.log('Executing Wi-Fi disconnect command');
                 
-                // Debug: First check which wifi device is connected
-                exec('sudo nmcli -t -f DEVICE,TYPE,STATE device | grep wifi | grep connected', (checkErr, checkOut, checkStderr) => {
-                    if (checkErr) {
-                        console.error('Error checking for connected wifi devices:', checkErr);
-                        if (this._updateValueCallback) {
-                            const message = 'Errore nella ricerca dei dispositivi Wi-Fi connessi: ' + checkStderr;
-                            this._updateValueCallback(Buffer.from(message));
-                        }
-                        callback(this.RESULT_UNLIKELY_ERROR);
-                        return;
-                    }
-                    
-                    // Parse the device name from the output (should be the first field)
-                    const devices = checkOut.split('\n').filter(line => line.trim() !== '');
-                    if (devices.length === 0) {
-                        console.log('No connected wifi devices found');
-                        if (this._updateValueCallback) {
-                            const message = 'Nessun dispositivo Wi-Fi connesso trovato';
-                            this._updateValueCallback(Buffer.from(message));
-                        }
-                        callback(this.RESULT_SUCCESS);
-                        return;
-                    }
-                    
-                    // Extract device name from first field (format is DEVICE:TYPE:STATE)
-                    const deviceName = devices[0].split(':')[0];
-                    console.log(`Found connected wifi device: ${deviceName}`);
-                    
-                    const cmd = `sudo nmcli device disconnect ${deviceName}`;
-                    console.log('Executing command:', cmd);
-                    
-                    exec(cmd, (error, stdout, stderr) => {
-                        if (error) {
-                            console.error(`Errore nella disconnessione Wi-Fi: ${error}`);
-                            console.error(`STDERR: ${stderr}`);
-                            if (this._updateValueCallback) {
-                                const message = 'Errore nella disconnessione Wi-Fi: ' + stderr;
-                                console.log('Sending error notification to client ->:', message);
-                                this._updateValueCallback(Buffer.from(message));
-                            }
-                            callback(this.RESULT_UNLIKELY_ERROR);
-                            return;
-                        }
-
-                        console.log('Disconnesso dalla rete Wi-Fi');
-                        console.log(`STDOUT: ${stdout}`);
+                // Direct approach to disconnect all wireless connections
+                exec('sudo nmcli radio wifi off && sleep 1 && sudo nmcli radio wifi on', (error, stdout, stderr) => {
+                    if (error) {
+                        console.error(`Errore nella disconnessione Wi-Fi: ${error}`);
+                        console.error(`STDERR: ${stderr}`);
                         
-                        if (this._updateValueCallback) {
-                            const message = 'Disconnesso con successo dalla rete Wi-Fi';
-                            console.log('Sending success notification to client ->:', message);
-                            this._updateValueCallback(Buffer.from(message));
-                        }
-                        callback(this.RESULT_SUCCESS);
-                    });
+                        // Try fallback method if the radio command fails
+                        exec('sudo nmcli -t -f DEVICE,TYPE,STATE device | grep wifi | grep connected', (checkErr, checkOut, checkStderr) => {
+                            if (checkErr || !checkOut || checkOut.trim() === '') {
+                                console.log('No connected wifi devices found or error checking');
+                                if (this._updateValueCallback) {
+                                    const message = 'Nessun dispositivo Wi-Fi connesso trovato o errore: ' + (checkStderr || stderr);
+                                    this._updateValueCallback(Buffer.from(message));
+                                }
+                                callback(this.RESULT_UNLIKELY_ERROR);
+                                return;
+                            }
+                            
+                            // Parse the device name from the output
+                            const devices = checkOut.split('\n').filter(line => line.trim() !== '');
+                            if (devices.length === 0) {
+                                console.log('No connected wifi devices found');
+                                if (this._updateValueCallback) {
+                                    const message = 'Nessun dispositivo Wi-Fi connesso trovato';
+                                    this._updateValueCallback(Buffer.from(message));
+                                }
+                                callback(this.RESULT_SUCCESS);
+                                return;
+                            }
+                            
+                            // Extract device name and try to disconnect
+                            const deviceName = devices[0].split(':')[0];
+                            console.log(`Found connected wifi device: ${deviceName}, trying disconnect`);
+                            
+                            exec(`sudo nmcli device disconnect ${deviceName}`, (discErr, discOut, discStderr) => {
+                                if (discErr) {
+                                    console.error(`Error disconnecting device ${deviceName}: ${discErr}`);
+                                    if (this._updateValueCallback) {
+                                        const message = `Errore disconnettendo ${deviceName}: ${discStderr}`;
+                                        this._updateValueCallback(Buffer.from(message));
+                                    }
+                                    callback(this.RESULT_UNLIKELY_ERROR);
+                                } else {
+                                    console.log(`Disconnected ${deviceName} successfully`);
+                                    if (this._updateValueCallback) {
+                                        const message = 'Disconnesso con successo dalla rete Wi-Fi';
+                                        this._updateValueCallback(Buffer.from(message));
+                                    }
+                                    callback(this.RESULT_SUCCESS);
+                                }
+                            });
+                        });
+                        return;
+                    }
+
+                    console.log('Disconnesso dalla rete Wi-Fi con successo (radio method)');
+                    
+                    if (this._updateValueCallback) {
+                        const message = 'Disconnesso con successo dalla rete Wi-Fi';
+                        console.log('Sending success notification to client ->:', message);
+                        this._updateValueCallback(Buffer.from(message));
+                    }
+                    callback(this.RESULT_SUCCESS);
                 });
             } else {
                 console.error('Azione non supportata');
